@@ -1,0 +1,22 @@
+import Ragu.Circuits.Element.IsEqual
+import Ragu.Core
+
+namespace Ragu.Instances.Element.IsEqual
+
+@[reducible]
+def p := Core.Primes.p
+
+def deserializeInput (input : Vector (Expression (F p)) 2) : Var Circuits.Element.IsEqual.Input (F p) :=
+  { a := input[0], b := input[1] }
+
+def serializeOutput (output : Var field (F p)) : Vector (Expression (F p)) 1 :=
+  #v[output]
+
+def formal_instance : Core.Statements.FormalInstance where
+  p
+  deserializeInput
+  serializeOutput
+
+  reimplementation := Circuits.Element.IsEqual.circuit.isGeneralFormalCircuit.toWithHint
+
+end Ragu.Instances.Element.IsEqual

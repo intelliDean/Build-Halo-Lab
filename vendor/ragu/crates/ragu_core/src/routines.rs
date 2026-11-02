@@ -1,0 +1,134 @@
+//! Functions that take [gadgets](crate::gadgets) as input and produce gadgets
+//! as output.
+//!
+//! Routines are intended for portions of the circuit that are either invoked
+//! multiple times (and so drivers can memoize their emitted constraints) or have
+//! efficiently predictable outputs (and so drivers can parallelize their
+//! witness generation).
+//!
+//! See also the [book] for a user-oriented introduction to routines.
+//!
+//! [book]: https://tachyon.z.cash/ragu/guide/routines.html
+
+use udon::field::Field;
+
+use crate::{
+    Result,
+    drivers::{Driver, DriverValue},
+    gadgets::{Bound, GadgetKind},
+};
+
+/// Sections of a circuit that take a [`Gadget`](crate::gadgets::Gadget) as
+/// input and produce a [`Gadget`](crate::gadgets::Gadget) as output.
+///
+/// Routines provide a [`predict`](Routine::predict) method so that drivers can
+/// optionally ask the routine implementor to predict the output gadget value by
+/// returning a [`Prediction`]. If the gadget output cannot be efficiently
+/// predicted then at least any auxiliary data that may be useful for execution
+/// can be returned.
+///
+/// The routine body is performed in the
+/// [`execute`](Routine::execute) method. Drivers can leverage predictions to
+/// execute routines in parallel for witness generation or skip constraint
+/// emission when the emitted constraints are memoized.
+pub trait Routine<F: Field>: Clone + Send {
+    /// The kind of a gadget that this routine expects as input
+    type Input: GadgetKind<F>;
+
+    /// The kind of a gadget that this routine expects as output
+    type Output: GadgetKind<F>;
+
+    /// The auxiliary data that may be provided by the
+    /// [`predict`](Routine::predict) method to be used during actual execution,
+    /// to avoid redundant computations.
+    type Aux<'dr>: Send + Clone;
+
+    /// Execute the routine with a driver given the designated input, returning
+    /// the designated output.
+    fn execute<'dr, D: Driver<'dr, F = F>>(
+        &self,
+        dr: &mut D,
+        input: Bound<'dr, D, Self::Input>,
+        aux: DriverValue<D, Self::Aux<'dr>>,
+    ) -> Result<Bound<'dr, D, Self::Output>>;
+
+    /// Routines can offer to predict their outputs given their inputs, which
+    /// drivers can leverage to skip actual execution or perform it in a
+    /// background thread. In any event, the prediction process produces some
+    /// routine-specific auxiliary data that can be leveraged during actual
+    /// execution to avoid duplicated effort.
+    ///
+    /// The returned auxiliary data must be forwarded to
+    /// [`execute`](Routine::execute) if the driver proceeds with execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns a witness-generation error if the prediction cannot be
+    /// computed from available witness input, or an input error if ordinary
+    /// input to the routine is outside its domain. Use [`Prediction::Unknown`]
+    /// instead when the routine simply cannot efficiently predict its output.
+    fn predict<'dr, D: Driver<'dr, F = F, Wire = ()>>(
+        &self,
+        dr: &mut D,
+        input: &Bound<'dr, D, Self::Input>,
+    ) -> Result<Prediction<Bound<'dr, D, Self::Output>, DriverValue<D, Self::Aux<'dr>>>>;
+}
+
+/// Describes the result of a routine's [`predict`](Routine::predict) method.
+///
+/// `Known(T, A)` represents a known prediction of output `T` and `Unknown(A)`
+/// represents an unpredictable result, in either case `A` represents auxiliary
+/// data that may be useful for execution.
+///
+/// # Design note
+///
+/// [`Routine::predict`] is witness-generation oriented, but constraint-only
+/// drivers piggyback on it just for the auxiliary data. This bundles two
+/// concerns:
+///
+/// - **Auxiliary data**: all drivers can benefit from avoiding redundant work.
+/// - **`Known` vs `Unknown`**: witness drivers can use this to short-circuit
+///   execution or parallelize witness generation.
+///
+/// Constraint-only drivers use [`into_aux`] to ignore this distinction.
+///
+/// [`into_aux`]: Prediction::into_aux
+pub enum Prediction<T, A> {
+    /// The routine has provided the resulting `T` value and some auxiliary
+    /// information that may be useful for actual execution.
+    Known(T, A),
+
+    /// The routine cannot (efficiently) predict the result of execution, and
+    /// the driver should simply execute it to obtain the result.
+    Unknown(A),
+}
+
+impl<T, A> Prediction<T, A> {
+    /// Extract auxiliary data, discarding the output prediction.
+    ///
+    /// Constraint-only drivers do not care whether the output was predicted;
+    /// they always call [`Routine::execute`] anyway. This helper makes that
+    /// explicit.
+    pub fn into_aux(self) -> A {
+        match self {
+            Prediction::Known(_, aux) | Prediction::Unknown(aux) => aux,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Prediction;
+
+    #[test]
+    fn prediction_into_aux_known() {
+        let p = Prediction::Known("output", 42u64);
+        assert_eq!(p.into_aux(), 42);
+    }
+
+    #[test]
+    fn prediction_into_aux_unknown() {
+        let p = Prediction::<&str, u64>::Unknown(99);
+        assert_eq!(p.into_aux(), 99);
+    }
+}

@@ -1,0 +1,2 @@
+{"initial":"0x0200000000000000000000000000000000000000000000000000000000000000","final_value":"0x3400000000000000000000000000000000000000000000000000000000000000","steps":2}
+{"command":"verify-chain","proof_bytes":7516,"setup_ms":4799.1868,"statement":{"final_value":"52","initial":"2","steps":2},"terminal_accumulator_checks":true,"verification_ms":907.3688,"verified":true}

@@ -1,0 +1,549 @@
+{
+  "schema_version": 2,
+  "gate_contract": {
+    "success": "exit 0, empty stderr, one JSON object, matching command; verification flags strictly true",
+    "chain_statement": "independently supplied and matched with exact value types",
+    "rejection": "exit 1, empty stdout, exact caller-specified stderr; crashes never count as rejection"
+  },
+  "hardware": {
+    "os": "Windows-10-10.0.26200-SP0",
+    "machine": "AMD64",
+    "logical_cpus": 8,
+    "cpu": "11th Gen Intel(R) Core(TM) i5-1145G7 @ 2.60GHz",
+    "ram_bytes": 16844550144
+  },
+  "mode": "release",
+  "samples_per_case": 1,
+  "timing_note": "Single real run, no statistical confidence claimed. CLI times separate setup; proving includes compression.",
+  "started_utc": "2026-10-21T02:57:14Z",
+  "passed": true,
+  "runs": [
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "ipa-demo",
+        "--length",
+        "1"
+      ],
+      "returncode": 0,
+      "wall_ms": 310.4062000056729,
+      "stdout": "{\"command\":\"ipa-demo\",\"hiding\":false,\"length\":1,\"proof_bytes\":76,\"proving_ms\":0.1437,\"setup_ms\":0.23650000000000002,\"verification_ms\":0.1922,\"verified\":true}\n",
+      "stderr": "",
+      "expected_success": true,
+      "expected_stderr": null,
+      "contract_validated": true,
+      "metrics": {
+        "command": "ipa-demo",
+        "hiding": false,
+        "length": 1,
+        "proof_bytes": 76,
+        "proving_ms": 0.1437,
+        "setup_ms": 0.23650000000000002,
+        "verification_ms": 0.1922,
+        "verified": true
+      }
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "ipa-demo",
+        "--length",
+        "2"
+      ],
+      "returncode": 0,
+      "wall_ms": 38.1436999887228,
+      "stdout": "{\"command\":\"ipa-demo\",\"hiding\":false,\"length\":2,\"proof_bytes\":140,\"proving_ms\":0.5949,\"setup_ms\":0.32739999999999997,\"verification_ms\":0.4893,\"verified\":true}\n",
+      "stderr": "",
+      "expected_success": true,
+      "expected_stderr": null,
+      "contract_validated": true,
+      "metrics": {
+        "command": "ipa-demo",
+        "hiding": false,
+        "length": 2,
+        "proof_bytes": 140,
+        "proving_ms": 0.5949,
+        "setup_ms": 0.32739999999999997,
+        "verification_ms": 0.4893,
+        "verified": true
+      }
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "ipa-demo",
+        "--length",
+        "4"
+      ],
+      "returncode": 0,
+      "wall_ms": 40.07169988472015,
+      "stdout": "{\"command\":\"ipa-demo\",\"hiding\":false,\"length\":4,\"proof_bytes\":204,\"proving_ms\":1.4366999999999999,\"setup_ms\":0.5436,\"verification_ms\":0.8714999999999999,\"verified\":true}\n",
+      "stderr": "",
+      "expected_success": true,
+      "expected_stderr": null,
+      "contract_validated": true,
+      "metrics": {
+        "command": "ipa-demo",
+        "hiding": false,
+        "length": 4,
+        "proof_bytes": 204,
+        "proving_ms": 1.4366999999999999,
+        "setup_ms": 0.5436,
+        "verification_ms": 0.8714999999999999,
+        "verified": true
+      }
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "ipa-demo",
+        "--length",
+        "8"
+      ],
+      "returncode": 0,
+      "wall_ms": 36.37790004722774,
+      "stdout": "{\"command\":\"ipa-demo\",\"hiding\":false,\"length\":8,\"proof_bytes\":268,\"proving_ms\":2.9638,\"setup_ms\":1.4305999999999999,\"verification_ms\":1.4801,\"verified\":true}\n",
+      "stderr": "",
+      "expected_success": true,
+      "expected_stderr": null,
+      "contract_validated": true,
+      "metrics": {
+        "command": "ipa-demo",
+        "hiding": false,
+        "length": 8,
+        "proof_bytes": 268,
+        "proving_ms": 2.9638,
+        "setup_ms": 1.4305999999999999,
+        "verification_ms": 1.4801,
+        "verified": true
+      }
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "ipa-demo",
+        "--length",
+        "3"
+      ],
+      "returncode": 1,
+      "wall_ms": 27.245600009337068,
+      "stdout": "",
+      "stderr": "error: InvalidLength\n",
+      "expected_success": false,
+      "expected_stderr": "error: InvalidLength\n",
+      "contract_validated": true
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "prove-chain",
+        "--initial",
+        "2",
+        "--steps",
+        "1",
+        "--out",
+        "evidence\\hardened\\chain-1.bin"
+      ],
+      "returncode": 0,
+      "wall_ms": 14919.84730004333,
+      "stdout": "{\"command\":\"prove-chain\",\"includes_terminal_compression\":true,\"proof_bytes\":7516,\"proof_file\":\"evidence\\\\hardened\\\\chain-1.bin\",\"proving_ms\":10103.7812,\"setup_ms\":4777.219,\"statement\":{\"final_value\":\"0x0700000000000000000000000000000000000000000000000000000000000000\",\"initial\":\"0x0200000000000000000000000000000000000000000000000000000000000000\",\"steps\":1}}\n",
+      "stderr": "",
+      "expected_success": true,
+      "expected_stderr": null,
+      "contract_validated": true,
+      "metrics": {
+        "command": "prove-chain",
+        "includes_terminal_compression": true,
+        "proof_bytes": 7516,
+        "proof_file": "evidence\\hardened\\chain-1.bin",
+        "proving_ms": 10103.7812,
+        "setup_ms": 4777.219,
+        "statement": {
+          "final_value": "0x0700000000000000000000000000000000000000000000000000000000000000",
+          "initial": "0x0200000000000000000000000000000000000000000000000000000000000000",
+          "steps": 1
+        }
+      }
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "verify-chain",
+        "--initial",
+        "0x0200000000000000000000000000000000000000000000000000000000000000",
+        "--final",
+        "0x0700000000000000000000000000000000000000000000000000000000000000",
+        "--steps",
+        "1",
+        "--proof",
+        "evidence\\hardened\\chain-1.bin"
+      ],
+      "returncode": 0,
+      "wall_ms": 5552.962699905038,
+      "stdout": "{\"command\":\"verify-chain\",\"proof_bytes\":7516,\"setup_ms\":4710.7510999999995,\"statement\":{\"final_value\":\"0x0700000000000000000000000000000000000000000000000000000000000000\",\"initial\":\"0x0200000000000000000000000000000000000000000000000000000000000000\",\"steps\":1},\"terminal_accumulator_checks\":true,\"verification_ms\":793.3642,\"verified\":true}\n",
+      "stderr": "",
+      "expected_success": true,
+      "expected_stderr": null,
+      "contract_validated": true,
+      "metrics": {
+        "command": "verify-chain",
+        "proof_bytes": 7516,
+        "setup_ms": 4710.7510999999995,
+        "statement": {
+          "final_value": "0x0700000000000000000000000000000000000000000000000000000000000000",
+          "initial": "0x0200000000000000000000000000000000000000000000000000000000000000",
+          "steps": 1
+        },
+        "terminal_accumulator_checks": true,
+        "verification_ms": 793.3642,
+        "verified": true
+      }
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "verify-chain",
+        "--initial",
+        "0x0300000000000000000000000000000000000000000000000000000000000000",
+        "--final",
+        "0x0700000000000000000000000000000000000000000000000000000000000000",
+        "--steps",
+        "1",
+        "--proof",
+        "evidence\\hardened\\chain-1.bin"
+      ],
+      "returncode": 1,
+      "wall_ms": 5597.809799946845,
+      "stdout": "",
+      "stderr": "error: proof rejected for expected public statement\n",
+      "expected_success": false,
+      "expected_stderr": "error: proof rejected for expected public statement\n",
+      "contract_validated": true
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "verify-chain",
+        "--initial",
+        "0x0200000000000000000000000000000000000000000000000000000000000000",
+        "--final",
+        "0x0b00000000000000000000000000000000000000000000000000000000000000",
+        "--steps",
+        "1",
+        "--proof",
+        "evidence\\hardened\\chain-1.bin"
+      ],
+      "returncode": 1,
+      "wall_ms": 5927.555400063284,
+      "stdout": "",
+      "stderr": "error: proof rejected for expected public statement\n",
+      "expected_success": false,
+      "expected_stderr": "error: proof rejected for expected public statement\n",
+      "contract_validated": true
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "verify-chain",
+        "--initial",
+        "0x0200000000000000000000000000000000000000000000000000000000000000",
+        "--final",
+        "0x0700000000000000000000000000000000000000000000000000000000000000",
+        "--steps",
+        "2",
+        "--proof",
+        "evidence\\hardened\\chain-1.bin"
+      ],
+      "returncode": 1,
+      "wall_ms": 8590.569199994206,
+      "stdout": "",
+      "stderr": "error: proof rejected for expected public statement\n",
+      "expected_success": false,
+      "expected_stderr": "error: proof rejected for expected public statement\n",
+      "contract_validated": true
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "verify-chain",
+        "--initial",
+        "0x0200000000000000000000000000000000000000000000000000000000000000",
+        "--final",
+        "0x0700000000000000000000000000000000000000000000000000000000000000",
+        "--steps",
+        "1",
+        "--proof",
+        "evidence\\hardened\\truncated.bin"
+      ],
+      "returncode": 1,
+      "wall_ms": 8582.535100053065,
+      "stdout": "",
+      "stderr": "error: proof rejected for expected public statement\n",
+      "expected_success": false,
+      "expected_stderr": "error: proof rejected for expected public statement\n",
+      "contract_validated": true
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "verify-chain",
+        "--initial",
+        "0x0200000000000000000000000000000000000000000000000000000000000000",
+        "--final",
+        "0x0700000000000000000000000000000000000000000000000000000000000000",
+        "--steps",
+        "1",
+        "--proof",
+        "evidence\\hardened\\trailing.bin"
+      ],
+      "returncode": 1,
+      "wall_ms": 7243.384400033392,
+      "stdout": "",
+      "stderr": "error: proof rejected for expected public statement\n",
+      "expected_success": false,
+      "expected_stderr": "error: proof rejected for expected public statement\n",
+      "contract_validated": true
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "verify-chain",
+        "--initial",
+        "0x0200000000000000000000000000000000000000000000000000000000000000",
+        "--final",
+        "0x0700000000000000000000000000000000000000000000000000000000000000",
+        "--steps",
+        "1",
+        "--proof",
+        "evidence\\hardened\\modified.bin"
+      ],
+      "returncode": 1,
+      "wall_ms": 6792.703100014478,
+      "stdout": "",
+      "stderr": "error: proof rejected for expected public statement\n",
+      "expected_success": false,
+      "expected_stderr": "error: proof rejected for expected public statement\n",
+      "contract_validated": true
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "verify-chain",
+        "--initial",
+        "0x0200000000000000000000000000000000000000000000000000000000000000",
+        "--final",
+        "0x0700000000000000000000000000000000000000000000000000000000000000",
+        "--steps",
+        "1",
+        "--proof",
+        "evidence\\hardened\\oversized.bin"
+      ],
+      "returncode": 1,
+      "wall_ms": 46.139299985952675,
+      "stdout": "",
+      "stderr": "error: proof file exceeds 128 KiB limit\n",
+      "expected_success": false,
+      "expected_stderr": "error: proof file exceeds 128 KiB limit\n",
+      "contract_validated": true
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "prove-chain",
+        "--initial",
+        "2",
+        "--steps",
+        "2",
+        "--out",
+        "evidence\\hardened\\chain-2.bin"
+      ],
+      "returncode": 0,
+      "wall_ms": 22937.92709999252,
+      "stdout": "{\"command\":\"prove-chain\",\"includes_terminal_compression\":true,\"proof_bytes\":7516,\"proof_file\":\"evidence\\\\hardened\\\\chain-2.bin\",\"proving_ms\":17050.4402,\"setup_ms\":5808.9511,\"statement\":{\"final_value\":\"0x3400000000000000000000000000000000000000000000000000000000000000\",\"initial\":\"0x0200000000000000000000000000000000000000000000000000000000000000\",\"steps\":2}}\n",
+      "stderr": "",
+      "expected_success": true,
+      "expected_stderr": null,
+      "contract_validated": true,
+      "metrics": {
+        "command": "prove-chain",
+        "includes_terminal_compression": true,
+        "proof_bytes": 7516,
+        "proof_file": "evidence\\hardened\\chain-2.bin",
+        "proving_ms": 17050.4402,
+        "setup_ms": 5808.9511,
+        "statement": {
+          "final_value": "0x3400000000000000000000000000000000000000000000000000000000000000",
+          "initial": "0x0200000000000000000000000000000000000000000000000000000000000000",
+          "steps": 2
+        }
+      }
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "verify-chain",
+        "--initial",
+        "0x0200000000000000000000000000000000000000000000000000000000000000",
+        "--final",
+        "0x3400000000000000000000000000000000000000000000000000000000000000",
+        "--steps",
+        "2",
+        "--proof",
+        "evidence\\hardened\\chain-2.bin"
+      ],
+      "returncode": 0,
+      "wall_ms": 8456.316100084223,
+      "stdout": "{\"command\":\"verify-chain\",\"proof_bytes\":7516,\"setup_ms\":7337.965999999999,\"statement\":{\"final_value\":\"0x3400000000000000000000000000000000000000000000000000000000000000\",\"initial\":\"0x0200000000000000000000000000000000000000000000000000000000000000\",\"steps\":2},\"terminal_accumulator_checks\":true,\"verification_ms\":1030.5017,\"verified\":true}\n",
+      "stderr": "",
+      "expected_success": true,
+      "expected_stderr": null,
+      "contract_validated": true,
+      "metrics": {
+        "command": "verify-chain",
+        "proof_bytes": 7516,
+        "setup_ms": 7337.965999999999,
+        "statement": {
+          "final_value": "0x3400000000000000000000000000000000000000000000000000000000000000",
+          "initial": "0x0200000000000000000000000000000000000000000000000000000000000000",
+          "steps": 2
+        },
+        "terminal_accumulator_checks": true,
+        "verification_ms": 1030.5017,
+        "verified": true
+      }
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "prove-chain",
+        "--initial",
+        "2",
+        "--steps",
+        "4",
+        "--out",
+        "evidence\\hardened\\chain-4.bin"
+      ],
+      "returncode": 0,
+      "wall_ms": 29495.257599977776,
+      "stdout": "{\"command\":\"prove-chain\",\"includes_terminal_compression\":true,\"proof_bytes\":7516,\"proof_file\":\"evidence\\\\hardened\\\\chain-4.bin\",\"proving_ms\":23296.1146,\"setup_ms\":6142.3099,\"statement\":{\"final_value\":\"0x6cd06f0000000000000000000000000000000000000000000000000000000000\",\"initial\":\"0x0200000000000000000000000000000000000000000000000000000000000000\",\"steps\":4}}\n",
+      "stderr": "",
+      "expected_success": true,
+      "expected_stderr": null,
+      "contract_validated": true,
+      "metrics": {
+        "command": "prove-chain",
+        "includes_terminal_compression": true,
+        "proof_bytes": 7516,
+        "proof_file": "evidence\\hardened\\chain-4.bin",
+        "proving_ms": 23296.1146,
+        "setup_ms": 6142.3099,
+        "statement": {
+          "final_value": "0x6cd06f0000000000000000000000000000000000000000000000000000000000",
+          "initial": "0x0200000000000000000000000000000000000000000000000000000000000000",
+          "steps": 4
+        }
+      }
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "verify-chain",
+        "--initial",
+        "0x0200000000000000000000000000000000000000000000000000000000000000",
+        "--final",
+        "0x6cd06f0000000000000000000000000000000000000000000000000000000000",
+        "--steps",
+        "4",
+        "--proof",
+        "evidence\\hardened\\chain-4.bin"
+      ],
+      "returncode": 0,
+      "wall_ms": 7567.45910004247,
+      "stdout": "{\"command\":\"verify-chain\",\"proof_bytes\":7516,\"setup_ms\":6656.0128,\"statement\":{\"final_value\":\"0x6cd06f0000000000000000000000000000000000000000000000000000000000\",\"initial\":\"0x0200000000000000000000000000000000000000000000000000000000000000\",\"steps\":4},\"terminal_accumulator_checks\":true,\"verification_ms\":839.3001,\"verified\":true}\n",
+      "stderr": "",
+      "expected_success": true,
+      "expected_stderr": null,
+      "contract_validated": true,
+      "metrics": {
+        "command": "verify-chain",
+        "proof_bytes": 7516,
+        "setup_ms": 6656.0128,
+        "statement": {
+          "final_value": "0x6cd06f0000000000000000000000000000000000000000000000000000000000",
+          "initial": "0x0200000000000000000000000000000000000000000000000000000000000000",
+          "steps": 4
+        },
+        "terminal_accumulator_checks": true,
+        "verification_ms": 839.3001,
+        "verified": true
+      }
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "prove-chain",
+        "--initial",
+        "2",
+        "--steps",
+        "8",
+        "--out",
+        "evidence\\hardened\\chain-8.bin"
+      ],
+      "returncode": 0,
+      "wall_ms": 40052.1670000162,
+      "stdout": "{\"command\":\"prove-chain\",\"includes_terminal_compression\":true,\"proof_bytes\":7516,\"proof_file\":\"evidence\\\\hardened\\\\chain-8.bin\",\"proving_ms\":33376.771400000005,\"setup_ms\":6627.8633,\"statement\":{\"final_value\":\"0xaf7abb7f9a800a3b5e210f753075c184e74df639ea11b2239e2273c1032d203a\",\"initial\":\"0x0200000000000000000000000000000000000000000000000000000000000000\",\"steps\":8}}\n",
+      "stderr": "",
+      "expected_success": true,
+      "expected_stderr": null,
+      "contract_validated": true,
+      "metrics": {
+        "command": "prove-chain",
+        "includes_terminal_compression": true,
+        "proof_bytes": 7516,
+        "proof_file": "evidence\\hardened\\chain-8.bin",
+        "proving_ms": 33376.771400000005,
+        "setup_ms": 6627.8633,
+        "statement": {
+          "final_value": "0xaf7abb7f9a800a3b5e210f753075c184e74df639ea11b2239e2273c1032d203a",
+          "initial": "0x0200000000000000000000000000000000000000000000000000000000000000",
+          "steps": 8
+        }
+      }
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "verify-chain",
+        "--initial",
+        "0x0200000000000000000000000000000000000000000000000000000000000000",
+        "--final",
+        "0xaf7abb7f9a800a3b5e210f753075c184e74df639ea11b2239e2273c1032d203a",
+        "--steps",
+        "8",
+        "--proof",
+        "evidence\\hardened\\chain-8.bin"
+      ],
+      "returncode": 0,
+      "wall_ms": 7036.052800016478,
+      "stdout": "{\"command\":\"verify-chain\",\"proof_bytes\":7516,\"setup_ms\":6197.8497,\"statement\":{\"final_value\":\"0xaf7abb7f9a800a3b5e210f753075c184e74df639ea11b2239e2273c1032d203a\",\"initial\":\"0x0200000000000000000000000000000000000000000000000000000000000000\",\"steps\":8},\"terminal_accumulator_checks\":true,\"verification_ms\":789.6035,\"verified\":true}\n",
+      "stderr": "",
+      "expected_success": true,
+      "expected_stderr": null,
+      "contract_validated": true,
+      "metrics": {
+        "command": "verify-chain",
+        "proof_bytes": 7516,
+        "setup_ms": 6197.8497,
+        "statement": {
+          "final_value": "0xaf7abb7f9a800a3b5e210f753075c184e74df639ea11b2239e2273c1032d203a",
+          "initial": "0x0200000000000000000000000000000000000000000000000000000000000000",
+          "steps": 8
+        },
+        "terminal_accumulator_checks": true,
+        "verification_ms": 789.6035,
+        "verified": true
+      }
+    }
+  ],
+  "completed_utc": "2026-10-21T03:00:13Z"
+}

@@ -1,0 +1,16 @@
+[package]
+name = "lab-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "lab-cli"
+path = "src/main.rs"
+
+[dependencies]
+edu-ipa = { path = "../edu-ipa" }
+recursive-demo = { path = "../recursive-demo" }
+serde_json = "=1.0.150"
+

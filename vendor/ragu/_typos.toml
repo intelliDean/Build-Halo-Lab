@@ -1,0 +1,29 @@
+[files]
+# Only check markdown files in book/ and Rust source files
+extend-exclude = [
+  "*.js",
+  "*.html",
+  "*.css",
+  "*.json",
+  "*.toml",
+  "*.yaml",
+  "*.yml",
+  "*.lock",
+  "*.svg",
+  "target/",
+  "node_modules/",
+]
+
+[default.extend-words]
+ND = "ND" # ND = NewDriver
+Bootle = "Bootle" # person name
+Groth= "Groth" # person name, not Growth
+ba = "ba" # variable name (b*a)
+thm = "thm" # Lean's ConstantInfo.thmInfo constructor
+hom = "hom" # mathematical homomorphism abbreviation
+Hom = "Hom" # Lean declaration suffix for bundled homomorphisms
+
+[default]
+extend-ignore-words-re = [
+  "(?i)projecti(ve|ves)", # math term
+]

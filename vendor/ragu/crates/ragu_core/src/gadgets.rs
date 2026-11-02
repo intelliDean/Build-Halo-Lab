@@ -1,0 +1,409 @@
+//! Stateful abstractions for algorithms and protocols that emit arithmetic
+//! circuit constraints.
+//!
+//! ## Design
+//!
+//! Gadgets are types that encapsulate wires and witness data.
+//! Because the underlying types are defined by drivers, gadget types are
+//! necessarily parameterized by a [`Driver`]. As with all circuit code, gadgets
+//! must emit constraints deterministically.
+//!
+//! Witness data is carried through driver-defined types whose contents can only
+//! be extracted through the driver, so no gadget can enforce facts about that
+//! data itself. In contrast, while wire types are also opaque handles defined by
+//! the driver, gadgets can carry **wire contracts**: facts about the assignments
+//! of their wires that are enforced or derived by constraints.
+//!
+//! The [`Gadget`] trait is implemented for gadgets instantiated over a driver;
+//! the [`GadgetKind`] trait relates gadgets instantiated over different
+//! drivers. Both can be [automatically derived](derive@Gadget) in most cases.
+//! Gadgets that are not used with [routines](crate::routines) need not
+//! implement these traits.
+//!
+//! See the *Gadgets* chapter in the [book] for design motivation, composition
+//! examples, and the derive macro walkthrough.
+//!
+//! #### Basic Properties
+//!
+//! * All gadgets are [`Clone`].
+//! * All gadgets are parameterized by a [`Driver`] type that outlives the
+//!   special lifetime `'dr`.
+//! * Gadgets can contain wires ([`D::Wire`](Driver::Wire)), witness data
+//!   ([`DriverValue<D, T>`](crate::drivers::DriverValue)), other gadgets, and
+//!   otherwise can contain any other [`Send`] contents that are `'static`.
+//!
+//! #### Fungibility
+//!
+//! [`Gadget`] is a trait for gadgets with a stricter property called
+//! **fungibility**: for any two instances `a` and `b` of the same concrete
+//! gadget type, substituting `a`'s corresponding wire assignments for `b`'s
+//! must yield an instance indistinguishable in all subsequent constraint
+//! emission from `a`, carrying the same wire contracts.
+//!
+//! One of the direct consequences of fungibility is that a [`Gadget`] impl must
+//! always contain the same number of wires in every instance, and cannot carry
+//! any additional state that would influence emitted constraints. It also means
+//! that gadgets usually cannot be `enum`s. Fortunately, most gadgets only
+//! contain wires, witness data and other gadgets. These simple gadgets always
+//! qualify as fungible by definition.
+//!
+//! #### Transformations between Drivers
+//!
+//! Gadgets must define a canonical mapping between their instantiations over
+//! different [`Driver`] types. This mapping uses the [`WireMap`] trait to
+//! facilitate the transformation of wires and witness data from one driver to
+//! another.
+//!
+//! That mapping defines the wire correspondence used by fungibility. It must
+//! visit wire fields in the same order for every instance of the same concrete
+//! gadget type, so drivers and internal Ragu code can count, substitute,
+//! extract, and pair wires for equality by following the same traversal.
+//!
+//! #### Multithreading
+//!
+//! Gadgets are required to be [`Send`] if their driver has `Send` wires. This
+//! allows gadgets to cross thread boundaries.
+//!
+//! Due to limitations of the Rust language this bound cannot be expressed
+//! easily without unnecessary API complexity. Instead, the [`GadgetKind`] trait
+//! is an `unsafe` trait to implement and the implementor must ensure that this
+//! property holds. This requirement is automatically imposed on gadgets that
+//! are automatically derived.
+//!
+//! #### Compositional Gadgets
+//!
+//! Gadgets can be composed of other gadgets by definition. Gadgets can even be
+//! polymorphic over gadgets, and some gadgets are even composed of gadgets that
+//! are instantiated with different drivers.
+//!
+//! See also the [book] for a user-oriented introduction to gadgets.
+//!
+//! [book]: https://tachyon.z.cash/ragu/guide/gadgets/
+
+mod foreign;
+
+use udon::field::Field;
+
+use super::{
+    Result,
+    convert::WireMap,
+    drivers::{Driver, DriverTypes},
+};
+
+/// Alias for the concrete rebinding of a [`GadgetKind`] `K` to a driver `D`. This simplifies
+/// the common pattern of accessing `<K as GadgetKind<F>>::Rebind<'dr, D>`.
+pub type Bound<'dr, D, K> = <K as GadgetKind<<D as Driver<'dr>>::F>>::Rebind<'dr, D>;
+
+/// A restricted view over a [`Driver`] whose only capability is to enforce
+/// equality between corresponding wire pairs: directly via
+/// [`enforce_conservative_equal`](Self::enforce_conservative_equal), or across a
+/// subgadget via
+/// [`enforce_conservative_equal_gadget`](Self::enforce_conservative_equal_gadget).
+///
+/// This is the adapter through which conservative gadget equality (see
+/// [`GadgetKind::enforce_conservative_equal_gadget`]) is performed.
+pub struct WireEqualizer<'a, 'dr, D: Driver<'dr>> {
+    dr: &'a mut D,
+    _marker: core::marker::PhantomData<&'dr ()>,
+}
+
+impl<'a, 'dr, D: Driver<'dr>> WireEqualizer<'a, 'dr, D> {
+    /// Constrains the corresponding wire pair `(a, b)` to be equal.
+    pub fn enforce_conservative_equal(&mut self, a: &D::Wire, b: &D::Wire) -> Result<()> {
+        self.dr.enforce_equal(a, b)
+    }
+
+    /// Constrains each corresponding wire pair of the subgadgets `(a, b)` to be
+    /// equal.
+    ///
+    /// [`GadgetKind::enforce_conservative_equal_gadget`] implementations use
+    /// this to recurse into subgadget fields.
+    pub fn enforce_conservative_equal_gadget<D2, G>(&mut self, a: &G, b: &G) -> Result<()>
+    where
+        D2: Driver<'dr, F = D::F, Wire = D::Wire>,
+        G: Gadget<'dr, D2>,
+    {
+        G::Kind::enforce_conservative_equal_gadget::<D, D2>(self, a, b)
+    }
+}
+
+/// A type that encapsulates wires allocated by a [`Driver`] along with any
+/// corresponding witness data, and satisfies **fungibility**.
+///
+/// See the [module docs](self) for the wire/witness asymmetry.
+///
+/// ## Fungibility
+///
+/// For any two instances `a` and `b` of the same concrete gadget type,
+/// substituting `a`'s corresponding wire assignments for `b`'s must yield an
+/// instance indistinguishable in all subsequent constraint emission from `a`,
+/// carrying the same wire contracts. This precludes dynamic-length
+/// collections, enum discriminants, and any other instance state that affects
+/// emitted constraints. Wires are fungible by definition, and witness data
+/// cannot affect emitted constraints, so gadgets containing only these
+/// automatically satisfy this requirement.
+///
+/// The wire correspondence used here is defined by
+/// [`GadgetKind::map_gadget`]. Its traversal must be the same for every
+/// instance of the same concrete gadget type.
+///
+/// ## Implementations
+///
+/// In order to make it easy to satisfy the API contract, this trait can be
+/// [automatically derived](derive@Gadget) for almost all gadgets.
+pub trait Gadget<'dr, D: Driver<'dr>>: Clone {
+    /// The driver-agnostic form of this gadget.
+    type Kind: GadgetKind<D::F, Rebind<'dr, D> = Self>;
+
+    /// Proxy for [`GadgetKind::map_gadget`].
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error from [`GadgetKind::map_gadget`].
+    fn map<'dst, WM: WireMap<D::F, Src = D, Dst: Driver<'dst, F = D::F>>>(
+        &self,
+        wm: &mut WM,
+    ) -> Result<Bound<'dst, WM::Dst, Self::Kind>> {
+        Self::Kind::map_gadget(self, wm)
+    }
+
+    /// Enforce that `self` and `other` are equal by constraining every
+    /// corresponding wire pair.
+    ///
+    /// This builds a restricted [`WireEqualizer`] over `dr` and delegates to
+    /// [`GadgetKind::enforce_conservative_equal_gadget`].
+    fn enforce_conservative_equal<D2: Driver<'dr, F = D::F, Wire = D::Wire>>(
+        &self,
+        dr: &mut D2,
+        other: &Self,
+    ) -> Result<()> {
+        let mut eq = WireEqualizer {
+            dr,
+            _marker: core::marker::PhantomData,
+        };
+        Self::Kind::enforce_conservative_equal_gadget::<D2, D>(&mut eq, self, other)
+    }
+
+    /// Returns how many wires are in this gadget.
+    ///
+    /// Gadgets do not vary in the number of wires they contain, so this
+    /// returns the same quantity regardless of the specific instance of this
+    /// [`Gadget`] implementation.
+    fn num_wires(&self) -> Result<usize> {
+        struct WireCounter<Src: DriverTypes> {
+            count: usize,
+            _marker: core::marker::PhantomData<Src>,
+        }
+
+        impl<F: Field, Src: DriverTypes<ImplField = F>> WireMap<F> for WireCounter<Src> {
+            type Src = Src;
+            type Dst = core::marker::PhantomData<F>;
+
+            fn convert_wire(&mut self, _: &Src::ImplWire) -> Result<()> {
+                self.count += 1;
+                Ok(())
+            }
+        }
+
+        let mut counter = WireCounter::<D> {
+            count: 0,
+            _marker: core::marker::PhantomData,
+        };
+        self.map(&mut counter)?;
+        Ok(counter.count)
+    }
+}
+
+/// The driver-agnostic form of a gadget.
+///
+/// The [`Gadget::Kind`] associated type is used to specify the driver-agnostic
+/// _kind_ of a gadget, using this trait to specify how gadgets can have their
+/// driver-specific components mapped to a rebound gadget type.
+///
+/// Implementations of this trait define a generic associated type
+/// [`Rebind`](GadgetKind::Rebind) which dictates the type of the gadget when
+/// bound to a specific driver. The `map` method defines how a gadget
+/// `Rebind<'dr, D1>` of one driver `D1` can be translated into a gadget
+/// `Rebind<'dr, D2>` for another driver `D2`. The mapping can leverage the
+/// [`WireMap`] trait to convert wires.
+///
+/// # `'static` bound
+///
+/// A kind describes a gadget's driver-agnostic structure and must not borrow
+/// from any driver context; lifetimes appear only through the
+/// [`Rebind`](GadgetKind::Rebind) associated type. The `'static` bound
+/// enforces this.
+///
+/// # Safety
+///
+/// This trait is unsafe to implement because the following property must hold:
+///
+/// * `D::Wire: Send` implies `Rebind<'dr, D>: Send`.
+///
+/// This is the **only** safety invariant. Fungibility (documented on
+/// [`Gadget`]) is a separate API contract, not a safety invariant.
+///
+/// It is difficult to express the `Send` bound for all gadgets in Rust's type
+/// system, though it can be done with enormous API complexity. Instead, this
+/// trait is `unsafe` to implement and the implementor must ensure that this
+/// property holds. The [`Gadget`](derive@Gadget) derive macro ensures that this
+/// is the case.
+pub unsafe trait GadgetKind<F: Field>: 'static {
+    /// The rebinding type for this gadget. Use [`Bound`] type alias instead of
+    /// accessing this directly.
+    type Rebind<'dr, D: Driver<'dr, F = F>>: Gadget<'dr, D, Kind = Self>;
+
+    /// Maps a gadget from one driver to another using a [`WireMap`].
+    ///
+    /// The mapping behavior defines the gadget's canonical wire traversal. It
+    /// must visit wire fields in the same order for every instance of the same
+    /// concrete gadget type, defining which wires correspond between
+    /// instances. [Fungibility](Gadget#fungibility) is stated in terms of this
+    /// correspondence, and drivers and internal Ragu code use it to count,
+    /// substitute, extract, and pair wires for equality.
+    fn map_gadget<'src, 'dst, WM: WireMap<F, Src: Driver<'src, F = F>, Dst: Driver<'dst, F = F>>>(
+        this: &Bound<'src, WM::Src, Self>,
+        wm: &mut WM,
+    ) -> Result<Bound<'dst, WM::Dst, Self>>;
+
+    /// Enforces equality between two instances of the same gadget by checking
+    /// equality between each pair of corresponding wires.
+    ///
+    /// The wire correspondence is defined by
+    /// [`map_gadget`](GadgetKind::map_gadget). Implementations receive a
+    /// [`WireEqualizer`], whose only operations are enforcing wire-pair
+    /// equality and recursing into subgadget fields.
+    ///
+    /// The provided gadgets can be for another driver, since the emitted
+    /// constraints only require corresponding wire assignments to be equal.
+    ///
+    /// This is a conservative fallback. When a gadget's kind implements
+    /// `GadgetEquals` (in `ragu_primitives`), the ordinary
+    /// `GadgetExt::enforce_equal` can discharge equality with fewer constraints
+    /// and is preferred.
+    fn enforce_conservative_equal_gadget<
+        'dr,
+        D1: Driver<'dr, F = F>,
+        D2: Driver<'dr, F = F, Wire = <D1 as Driver<'dr>>::Wire>,
+    >(
+        eq: &mut WireEqualizer<'_, 'dr, D1>,
+        a: &Bound<'dr, D2, Self>,
+        b: &Bound<'dr, D2, Self>,
+    ) -> Result<()>;
+}
+
+/// Automatically derives the [`Gadget`], [`GadgetKind`] and [`Clone`] traits
+/// for common gadget types.
+///
+/// This only works for structs with named fields. Enums are disallowed because
+/// their discriminants constitute instance state that would violate the
+/// fungibility requirement.
+///
+/// ## Example
+///
+/// ```rust
+/// # use ragu_core::{drivers::{Driver, DriverValue}, gadgets::Gadget};
+/// #[derive(Gadget)]
+/// struct Boolean<'dr, D: Driver<'dr>> {
+///     #[ragu(wire)]
+///     wire: D::Wire,
+///     #[ragu(value)]
+///     value: DriverValue<D, bool>,
+/// }
+/// ```
+///
+/// This automatically derives [`Gadget`], [`GadgetKind`] and [`Clone`]
+/// implementations for your struct. Fields can be annotated to specify their
+/// type:
+/// * Fields without any annotation default to gadget fields, which are
+///   converted using [`GadgetKind::map_gadget`].
+/// * `#[ragu(wire)]` for fields that represent wires in the driver, which are
+///   converted using [`WireMap::convert_wire`].
+/// * `#[ragu(value)]` for fields that represent driver-specific values, which
+///   are converted or cloned using
+///   [`DriverValue::just`](crate::maybe::Maybe::just).
+/// * `#[ragu(gadget)]` can be used to explicitly mark gadget fields, but is
+///   optional since this is the default behavior.
+/// * `#[ragu(phantom)]` for `PhantomData` fields.
+///
+/// The macro assumes by default that the driver type is `D` and determines the
+/// lifetime by analyzing the bounds. It is possible to override the default
+/// type parameter used as the driver for the gadget by annotating it with
+/// `#[ragu(driver)]` like so:
+///
+/// ```rust
+/// # use ragu_core::{drivers::{Driver, DriverValue}, gadgets::Gadget};
+/// #[derive(Gadget)]
+/// struct Boolean<'my_dr, #[ragu(driver)] MyD: Driver<'my_dr>> {
+///     #[ragu(wire)]
+///     wire: MyD::Wire,
+///     #[ragu(value)]
+///     value: DriverValue<MyD, MyD::F>,
+/// }
+/// ```
+pub use ragu_macros::Gadget;
+/// Obtains the concrete [`GadgetKind<F>`] of a [`Gadget`] type given only the
+/// gadget's type and a field type `F`. This is particularly useful in contexts
+/// where a specific concrete driver does not exist or the type is annoying to
+/// write by hand.
+///
+/// ## Usage
+///
+/// The macro is provided the field type `F` and the gadget type `G`, separated
+/// by a semicolon. Anywhere in the gadget type where a driver is expected, you
+/// can instead use a bare `_`, and anywhere the driver's lifetime `'dr` is
+/// expected you can use `'_` instead.
+///
+/// ```rust
+/// # use udon::field::Field;
+/// # use ragu_core::{drivers::{Driver, DriverValue}, gadgets::Kind};
+/// # #[derive(ragu_core::gadgets::Gadget)]
+/// # struct Boolean<'my_dr, #[ragu(driver)] MyD: Driver<'my_dr>> {
+/// #     #[ragu(wire)]
+/// #     wire: MyD::Wire,
+/// #     #[ragu(value)]
+/// #     value: DriverValue<MyD, MyD::F>,
+/// # }
+/// # trait MyTrait<F: Field> {
+/// #     type Kind: ragu_core::gadgets::GadgetKind<F>;
+/// # }
+/// # struct Foo;
+/// impl<F: Field> MyTrait<F> for Foo {
+///     type Kind = Kind![F; Boolean<'_, _>];
+/// }
+/// ```
+///
+/// In this example, the `Kind!` macro expands to the type
+///
+/// ```rust
+/// # use udon::field::Field;
+/// # use ragu_core::{drivers::{Driver, DriverValue}, gadgets::{Kind, Gadget}};
+/// # use core::marker::PhantomData;
+/// # #[derive(ragu_core::gadgets::Gadget)]
+/// # struct Boolean<'my_dr, #[ragu(driver)] MyD: Driver<'my_dr>> {
+/// #     #[ragu(wire)]
+/// #     wire: MyD::Wire,
+/// #     #[ragu(value)]
+/// #     value: DriverValue<MyD, MyD::F>,
+/// # }
+/// # type MyKind<F: Field> =
+/// <Boolean<'static, PhantomData<F>> as Gadget<'static, PhantomData<F>>>::Kind
+/// # ;
+/// ```
+///
+/// This works because [`PhantomData<F>`](core::marker::PhantomData) implements
+/// [`Driver<'static>`](Driver) for all fields `F`, and the circular constraint
+/// between [`Gadget::Kind`] and the rebind type [`GadgetKind::Rebind`] requires
+/// the resulting [`GadgetKind`] type to be the (only) correct one. This macro
+/// only works in contexts where the (possibly generic) [`Field`] type `F` is
+/// known, and any other constraints on the [`Gadget`] implementation are
+/// satisfied.
+///
+/// In some contexts (like the `Self` type of an impl) the fully qualified
+/// expansion runs afoul of strict portions of Rust's coherence and type
+/// parameter constraint rules even though the type does not violate them. In
+/// these cases, it's usually sufficient to put an `@` symbol at the start of
+/// your type, like `Kind![F; @Boolean<'_, _>]`, which signals to the procedural
+/// macro that it should perform the substitution without qualifications, which
+/// works fine in most cases.
+pub use ragu_macros::gadget_kind as Kind;

@@ -1,0 +1,22 @@
+{
+  "upstream": "https://github.com/tachyon-zcash/ragu",
+  "commit": "4e3d08ddea2542c7ebb2debec2ec94bc6a4f59e5",
+  "comparison": "tracked file contents, CRLF normalized",
+  "unchanged_tracked_files": 747,
+  "changed_tracked_files": [
+    "crates/ragu_acceleration/katex-header.html",
+    "crates/ragu_backend/katex-header.html",
+    "crates/ragu_circuits/katex-header.html",
+    "crates/ragu_core/katex-header.html",
+    "crates/ragu_gadgets/katex-header.html",
+    "crates/ragu_macros/katex-header.html",
+    "crates/ragu_pcd/katex-header.html",
+    "crates/ragu_pcd/src/compress/mod.rs",
+    "crates/ragu_primitives/katex-header.html",
+    "crates/ragu_testing/katex-header.html"
+  ],
+  "missing_tracked_files": [],
+  "added_transport_module": "crates/ragu_pcd/src/compress/codec.rs",
+  "documentation_symlinks": "crates/*/katex-header.html materialized with upstream target contents on Windows",
+  "cryptographic_equation_changes": false
+}

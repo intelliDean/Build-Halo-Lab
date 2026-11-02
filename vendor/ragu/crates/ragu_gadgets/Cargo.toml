@@ -1,0 +1,27 @@
+[package]
+name = "ragu_gadgets"
+version.workspace = true
+authors.workspace = true
+description = "Gadgets for the Ragu project"
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+readme = "README.md"
+homepage.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/ragu_gadgets"
+categories = ["cryptography", "mathematics", "algorithms", "development-tools", "no-std"]
+keywords = ["cryptography", "zero-knowledge", "gadgets", "circuits", "pcd"]
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--html-in-header", "katex-header.html"]
+
+[features]
+default = []
+std = []
+
+[lib]
+bench = false
+
+[dependencies]

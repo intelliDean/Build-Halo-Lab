@@ -1,0 +1,44 @@
+[package]
+name = "ragu_macros"
+version.workspace = true
+authors.workspace = true
+description = "Procedural macros intended for internal use in the Ragu project"
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+readme = "README.md"
+homepage.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/ragu_macros"
+categories = ["development-tools"]
+keywords = ["proc-macro", "macros", "cryptography", "zero-knowledge"]
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--html-in-header", "katex-header.html"]
+
+[lib]
+proc-macro = true
+bench = false
+
+[dependencies]
+quote = "1.0.40"
+proc-macro2 = "1.0.95"
+num-bigint = "0.4.6"
+num-traits = "0.2.19"
+proc-macro-crate = "3.3.0"
+
+[dependencies.syn]
+version = "2.0.101"
+# Helpful for debugging:
+# features = ["full", "extra-traits"]
+
+[dev-dependencies]
+udon = { workspace = true }
+
+# These are hacks to ensure that these crates are visible to `proc-macro-crate`
+# when building doc tests that invoke derive macros inside the derive macro's
+# actual documentation. Also, this allows us to have compilation errors if paths
+# change where macros are ultimately re-exported downstream.
+ragu_core = { path = "../ragu_core", version = "0.0.0" }
+ragu_primitives = { path = "../ragu_primitives", version = "0.0.0" }

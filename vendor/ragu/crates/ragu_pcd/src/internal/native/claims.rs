@@ -1,0 +1,483 @@
+//! Common abstraction for orchestrating revdot claims.
+//!
+//! This module provides a unified interface for assembling `a` and `b`
+//! polynomial vectors for revdot claim verification, used by both verification
+//! and proving. The same abstraction is used to handle consistency evaluation
+//! logic in the recursive circuit.
+//!
+//! The abstraction separates:
+//! - [`Source`]: Provides rx values from proof sources
+//! - [`Processor`]: Processes rx values into accumulated outputs
+//! - [`build`]: Orchestrates claim building in unified order
+
+use alloc::{borrow::Cow, vec::Vec};
+use core::iter::{once, repeat_n};
+
+use ragu_circuits::{
+    polynomials::{Rank, sparse},
+    registry::CircuitIndex,
+};
+use ragu_core::{Result, drivers::Driver};
+use ragu_primitives::Element;
+use udon::field::Field;
+
+use super::{InternalCircuitIndex, NUM_BINDERS, NUM_ENDOSCALING_STEPS, RxComponent, RxIndex};
+use crate::internal::claims::{Builder, Source, sum_polynomials};
+
+/// Number of circuits using unified $k(y)$ in [`build`].
+///
+/// These circuits use [`unified::InternalOutputKind`]:
+/// [`hashes_2`], [`inner_collapse`], [`outer_collapse`], [`compute_v`], the
+/// [`NUM_BINDERS`] `bind_challenges` circuits, `bind_beta` and
+/// `bind_endoscalar`.
+///
+/// Note: [`hashes_1`] separately uses `unified_bridge_ky` because its public
+/// inputs include child proof headers (see [`hashes_1::Output`]).
+///
+/// [`hashes_1`]: crate::internal::native::circuits::hashes_1
+/// [`hashes_1::Output`]: crate::internal::native::circuits::hashes_1::Output
+/// [`hashes_2`]: crate::internal::native::circuits::hashes_2
+/// [`inner_collapse`]: crate::internal::native::circuits::inner_collapse
+/// [`outer_collapse`]: crate::internal::native::circuits::outer_collapse
+/// [`compute_v`]: crate::internal::native::circuits::compute_v
+/// [`unified::InternalOutputKind`]: crate::internal::native::unified::InternalOutputKind
+const NUM_UNIFIED_CIRCUITS: usize = 6 + NUM_BINDERS;
+
+/// The points stages the walk's inputs are committed in, in chain order.
+const POINTS_INPUT_STAGES: [RxIndex; 5] = [
+    RxIndex::PointsBinding,
+    RxIndex::PointsChildren,
+    RxIndex::PointsRegistryWx,
+    RxIndex::PointsAb,
+    RxIndex::PointsF,
+];
+
+/// Trait that processes claim values into accumulated outputs.
+///
+/// Defines how to process `rx` values from a [`Source`]. Implementations handle
+/// polynomial and evaluation contexts differently:
+///
+/// - **Polynomial context** ([`Builder`]): `Rx` is a polynomial
+///   reference. The processor accumulates polynomials for error term
+///   construction.
+/// - **Fuse path** ([`Builder`] with `TrackedPoly` `A`): `Rx` is an
+///   `Atom` pairing a polynomial reference with a `FoldKey` key for
+///   commitment decomposition tracking (see `fuse::claims`).
+/// - **Evaluation context**: `Rx` carries a single evaluated field element at
+///   $xz$. Both the `ax` and `bx` vectors derive from this shared evaluation:
+///   `ax` uses $r\_i(xz)$ directly (since $A$ has no dilation), while `bx` adds
+///   $s\_y + t(xz)$.
+pub trait Processor<Rx, AppCircuitId> {
+    /// Processes a raw claim with `a` and `b` traces provided directly.
+    /// ($k(y) = c$).
+    fn raw_claim(&mut self, a: Rx, b: Rx);
+
+    /// Process a single-trace application circuit claim
+    /// ($k(y) = \text{application\_ky}$).
+    fn circuit_claim(&mut self, app_id: AppCircuitId, rx: Rx);
+
+    /// Process an internal circuit claim whose trace is the sum of the given
+    /// rxs ($k(y) = \text{internal\_ky}$).
+    ///
+    /// The processor looks up registry via [`InternalCircuitIndex`] from its
+    /// stored context.
+    fn internal_circuit_claim(&mut self, id: InternalCircuitIndex, rxs: impl Iterator<Item = Rx>);
+
+    /// Process a claim whose trace is the Horner fold (with $z$) of the given
+    /// rxs, with one rx per fold slot ($k(y) = 0$, equivalently
+    /// $\text{revdot}(a, s\_y) = 0$).
+    ///
+    /// The default implementation wraps each rx as a single-element group and
+    /// delegates to [`grouped_bonding_claim`](Self::grouped_bonding_claim).
+    fn bonding_claim(
+        &mut self,
+        id: InternalCircuitIndex,
+        rxs: impl Iterator<Item = Rx>,
+    ) -> Result<()> {
+        self.grouped_bonding_claim(id, rxs.map(core::iter::once))
+    }
+
+    /// Process a claim whose trace is the Horner fold (with $z$) of per-group
+    /// sums, where each fold slot holds the sum of one inner iterator
+    /// ($k(y) = 0$).
+    ///
+    /// Returns `Result<()>` because the evaluation context requires fallible
+    /// fold operations.
+    fn grouped_bonding_claim(
+        &mut self,
+        id: InternalCircuitIndex,
+        groups: impl Iterator<Item = impl Iterator<Item = Rx>>,
+    ) -> Result<()>;
+}
+
+impl<'m, 'rx, F: Field, R: Rank, B: ragu_backend::Backend>
+    Processor<&'rx sparse::Polynomial<F, R>, CircuitIndex>
+    for Builder<'m, 'rx, Cow<'rx, sparse::Polynomial<F, R>>, F, R, B>
+{
+    fn raw_claim(&mut self, a: &'rx sparse::Polynomial<F, R>, b: &'rx sparse::Polynomial<F, R>) {
+        self.a.push(Cow::Borrowed(a));
+        self.b.push(Cow::Borrowed(b));
+    }
+
+    fn circuit_claim(&mut self, circuit_id: CircuitIndex, rx: &'rx sparse::Polynomial<F, R>) {
+        self.circuit_impl(circuit_id, Cow::Borrowed(rx));
+    }
+
+    fn internal_circuit_claim(
+        &mut self,
+        id: InternalCircuitIndex,
+        rxs: impl Iterator<Item = &'rx sparse::Polynomial<F, R>>,
+    ) {
+        let circuit_id = id.circuit_index();
+        let rx = sum_polynomials(rxs);
+        self.circuit_impl(circuit_id, rx);
+    }
+
+    fn grouped_bonding_claim(
+        &mut self,
+        id: InternalCircuitIndex,
+        groups: impl Iterator<Item = impl Iterator<Item = &'rx sparse::Polynomial<F, R>>>,
+    ) -> Result<()> {
+        let circuit_id = id.circuit_index();
+        let folded = self.fold_bonding_groups(groups);
+        self.bonding_impl(circuit_id, folded);
+        Ok(())
+    }
+}
+
+/// Build claims in unified interleaved order from a source.
+///
+/// The ordering is: for each claim type, add claims for all proofs before
+/// moving to the next claim type. This produces an interleaved order:
+/// `[L_raw, R_raw, L_app, R_app, L_h1, R_h1, ...]` for two-proof sources.
+///
+/// This ordering must match the $k(y)$ ordering in
+/// [`inner_collapse`](crate::internal::native::circuits::inner_collapse)
+/// and `compute_outer_error` in the fuse implementation.
+pub fn build<S, P>(source: &S, processor: &mut P) -> Result<()>
+where
+    S: Source<RxComponent = RxComponent>,
+    P: Processor<S::Rx, S::AppCircuitId>,
+{
+    use RxComponent::*;
+    use RxIndex::*;
+
+    // Raw claims (interleaved per proof)
+    for (a, b) in source.rx(AbA).zip(source.rx(AbB)) {
+        processor.raw_claim(a, b);
+    }
+
+    // App circuits (interleaved per proof)
+    for (app_id, rx) in source.app_circuits().zip(source.rx(Rx(Application))) {
+        processor.circuit_claim(app_id, rx);
+    }
+
+    // Internal circuits and stages in canonical order.
+    for &id in &InternalCircuitIndex::ALL {
+        use InternalCircuitIndex::*;
+        match id {
+            // hashes_1: Hashes1 + Preamble + OuterError
+            Hashes1Circuit => {
+                for ((h1, pre), en) in source
+                    .rx(Rx(Hashes1))
+                    .zip(source.rx(Rx(Preamble)))
+                    .zip(source.rx(Rx(OuterError)))
+                {
+                    processor.internal_circuit_claim(id, [h1, pre, en].into_iter());
+                }
+            }
+
+            // hashes_2: Hashes2 + OuterError
+            Hashes2Circuit => {
+                for (h2, en) in source.rx(Rx(Hashes2)).zip(source.rx(Rx(OuterError))) {
+                    processor.internal_circuit_claim(id, [h2, en].into_iter());
+                }
+            }
+
+            // inner_collapse: InnerCollapse + Preamble + InnerError + OuterError
+            InnerCollapseCircuit => {
+                for (((pc, pre), em), en) in source
+                    .rx(Rx(InnerCollapse))
+                    .zip(source.rx(Rx(Preamble)))
+                    .zip(source.rx(Rx(InnerError)))
+                    .zip(source.rx(Rx(OuterError)))
+                {
+                    processor.internal_circuit_claim(id, [pc, pre, em, en].into_iter());
+                }
+            }
+
+            // outer_collapse: OuterCollapse + Preamble + OuterError
+            OuterCollapseCircuit => {
+                for ((fc, pre), en) in source
+                    .rx(Rx(OuterCollapse))
+                    .zip(source.rx(Rx(Preamble)))
+                    .zip(source.rx(Rx(OuterError)))
+                {
+                    processor.internal_circuit_claim(id, [fc, pre, en].into_iter());
+                }
+            }
+
+            // compute_v: ComputeV + Preamble + Query + Eval
+            ComputeVCircuit => {
+                for (((cv, pre), q), e) in source
+                    .rx(Rx(ComputeV))
+                    .zip(source.rx(Rx(Preamble)))
+                    .zip(source.rx(Rx(Query)))
+                    .zip(source.rx(Rx(Eval)))
+                {
+                    processor.internal_circuit_claim(id, [cv, pre, q, e].into_iter());
+                }
+            }
+
+            // bind_challenges: BindChallenges(k) + Preamble + Query + Eval
+            BindChallengesCircuit(k) => {
+                for (((bc, pre), q), e) in source
+                    .rx(Rx(BindChallenges(k)))
+                    .zip(source.rx(Rx(Preamble)))
+                    .zip(source.rx(Rx(Query)))
+                    .zip(source.rx(Rx(Eval)))
+                {
+                    processor.internal_circuit_claim(id, [bc, pre, q, e].into_iter());
+                }
+            }
+
+            // bind_beta: BindBeta + PointsBinding + Preamble + OuterError
+            BindBetaCircuit => {
+                for (((bb, pb), pre), en) in source
+                    .rx(Rx(BindBeta))
+                    .zip(source.rx(Rx(PointsBinding)))
+                    .zip(source.rx(Rx(Preamble)))
+                    .zip(source.rx(Rx(OuterError)))
+                {
+                    processor.internal_circuit_claim(id, [bb, pb, pre, en].into_iter());
+                }
+            }
+
+            // bind_endoscalar: BindEndoscalar + every points input stage +
+            // PointsWalk
+            BindEndoscalarCircuit => {
+                let mut per_proof: Vec<Vec<S::Rx>> = Vec::new();
+                for index in [BindEndoscalar]
+                    .into_iter()
+                    .chain(POINTS_INPUT_STAGES)
+                    .chain([PointsWalk])
+                {
+                    for (i, rx) in source.rx(Rx(index)).enumerate() {
+                        if per_proof.len() <= i {
+                            per_proof.push(Vec::new());
+                        }
+                        per_proof[i].push(rx);
+                    }
+                }
+                for rxs in per_proof {
+                    processor.internal_circuit_claim(id, rxs.into_iter());
+                }
+            }
+
+            // endoscaling step k: its rx + every points input stage +
+            // PointsWalk (k(y) = 1)
+            EndoscalingStep(step) => {
+                let mut per_proof: Vec<Vec<S::Rx>> = Vec::new();
+                for index in [RxIndex::EndoscalingStep(step)]
+                    .into_iter()
+                    .chain(POINTS_INPUT_STAGES)
+                    .chain([PointsWalk])
+                {
+                    for (i, rx) in source.rx(Rx(index)).enumerate() {
+                        if per_proof.len() <= i {
+                            per_proof.push(Vec::new());
+                        }
+                        per_proof[i].push(rx);
+                    }
+                }
+                for rxs in per_proof {
+                    processor.internal_circuit_claim(id, rxs.into_iter());
+                }
+            }
+
+            // Native stages (aggregated across all proofs)
+            PreambleStage => {
+                processor.bonding_claim(id, source.rx(Rx(Preamble)))?;
+            }
+            InnerErrorStage => {
+                processor.bonding_claim(id, source.rx(Rx(InnerError)))?;
+            }
+            OuterErrorStage => {
+                processor.bonding_claim(id, source.rx(Rx(OuterError)))?;
+            }
+            QueryStage => {
+                processor.bonding_claim(id, source.rx(Rx(Query)))?;
+            }
+            EvalStage => {
+                processor.bonding_claim(id, source.rx(Rx(Eval)))?;
+            }
+            PointsBindingStage => {
+                processor.bonding_claim(id, source.rx(Rx(PointsBinding)))?;
+            }
+            PointsChildrenStage => {
+                processor.bonding_claim(id, source.rx(Rx(PointsChildren)))?;
+            }
+            PointsRegistryWxStage => {
+                processor.bonding_claim(id, source.rx(Rx(PointsRegistryWx)))?;
+            }
+            PointsAbStage => {
+                processor.bonding_claim(id, source.rx(Rx(PointsAb)))?;
+            }
+            PointsFStage => {
+                processor.bonding_claim(id, source.rx(Rx(PointsF)))?;
+            }
+            PointsWalkStage => {
+                processor.bonding_claim(id, source.rx(Rx(PointsWalk)))?;
+            }
+
+            // Final stage bonding claims
+            InnerErrorFinalStaged => {
+                processor.bonding_claim(id, source.rx(Rx(InnerCollapse)))?;
+            }
+            OuterErrorFinalStaged => {
+                processor.bonding_claim(
+                    id,
+                    source
+                        .rx(Rx(Hashes1))
+                        .chain(source.rx(Rx(Hashes2)))
+                        .chain(source.rx(Rx(OuterCollapse)))
+                        .chain(source.rx(Rx(BindBeta))),
+                )?;
+            }
+            EvalFinalStaged => {
+                processor.bonding_claim(
+                    id,
+                    source.rx(Rx(ComputeV)).chain(
+                        (0..NUM_BINDERS as u32).flat_map(|k| source.rx(Rx(BindChallenges(k)))),
+                    ),
+                )?;
+            }
+            PointsWalkFinalStaged => {
+                processor.bonding_claim(
+                    id,
+                    source.rx(Rx(BindEndoscalar)).chain(
+                        (0..NUM_ENDOSCALING_STEPS as u32)
+                            .flat_map(|step| source.rx(Rx(RxIndex::EndoscalingStep(step)))),
+                    ),
+                )?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Trait for providing $k(y)$ values for claim verification.
+pub trait KySource {
+    /// The $k(y)$ value type.
+    type Ky: Clone;
+
+    /// Iterator over raw_c values (the c from AB proof / preamble unified).
+    fn raw_c(&self) -> impl Iterator<Item = Self::Ky>;
+
+    /// Iterator over application circuit $k(y)$ values.
+    fn application_ky(&self) -> impl Iterator<Item = Self::Ky>;
+
+    /// Iterator over unified bridge $k(y)$ values.
+    fn unified_bridge_ky(&self) -> impl Iterator<Item = Self::Ky>;
+
+    /// Base iterator over unified $k(y)$ values.
+    ///
+    /// Will be repeated [`NUM_UNIFIED_CIRCUITS`] times.
+    /// The `+ Clone` bound is required for `repeat_n` in [`ky_values`].
+    fn unified_ky(&self) -> impl Iterator<Item = Self::Ky> + Clone;
+
+    /// One value of $1$ per proof, for the endoscaling step checks.
+    ///
+    /// Repeated [`NUM_ENDOSCALING_STEPS`] times; the `+ Clone` bound is
+    /// required for `repeat_n` in [`ky_values`].
+    fn ones(&self) -> impl Iterator<Item = Self::Ky> + Clone;
+
+    /// The zero value for stage claims.
+    fn zero(&self) -> Self::Ky;
+}
+
+/// Build an iterator over $k(y)$ values in claim order.
+///
+/// Chains the $k(y)$ sources in the order required by [`build`],
+/// with `unified_ky` repeated [`NUM_UNIFIED_CIRCUITS`] times and `ones`
+/// [`NUM_ENDOSCALING_STEPS`] times, followed by infinite zeros for stage
+/// claims.
+///
+/// The `unified_ky` and `unified_bridge_ky` values are computed by
+/// [`ProofInputs::unified_ky_values`](super::stages::preamble::ProofInputs::unified_ky_values)
+/// via Horner evaluation of the circuit instance polynomial.
+pub fn ky_values<S: KySource>(source: &S) -> impl Iterator<Item = S::Ky> {
+    source
+        .raw_c()
+        .chain(source.application_ky())
+        .chain(source.unified_bridge_ky())
+        .chain(repeat_n(source.unified_ky(), NUM_UNIFIED_CIRCUITS).flatten())
+        .chain(repeat_n(source.ones(), NUM_ENDOSCALING_STEPS).flatten())
+        .chain(core::iter::repeat(source.zero()))
+}
+
+pub struct TwoProofKySource<'dr, D: Driver<'dr>> {
+    pub left_raw_c: Element<'dr, D>,
+    pub right_raw_c: Element<'dr, D>,
+    pub left_app: Element<'dr, D>,
+    pub right_app: Element<'dr, D>,
+    pub left_bridge: Element<'dr, D>,
+    pub right_bridge: Element<'dr, D>,
+    pub left_unified: Element<'dr, D>,
+    pub right_unified: Element<'dr, D>,
+    pub one: Element<'dr, D>,
+    pub zero: Element<'dr, D>,
+}
+
+impl<'dr, D: Driver<'dr>> TwoProofKySource<'dr, D> {
+    /// Create a [`TwoProofKySource`] from child k(y) outputs and raw c values.
+    pub fn new(
+        dr: &mut D,
+        left_raw_c: Element<'dr, D>,
+        right_raw_c: Element<'dr, D>,
+        left_ky: &super::stages::outer_error::ChildKyOutputs<'dr, D>,
+        right_ky: &super::stages::outer_error::ChildKyOutputs<'dr, D>,
+    ) -> Self {
+        Self {
+            left_raw_c,
+            right_raw_c,
+            left_app: left_ky.application.clone(),
+            right_app: right_ky.application.clone(),
+            left_bridge: left_ky.unified_bridge.clone(),
+            right_bridge: right_ky.unified_bridge.clone(),
+            left_unified: left_ky.unified.clone(),
+            right_unified: right_ky.unified.clone(),
+            one: Element::one(),
+            zero: Element::zero(dr),
+        }
+    }
+}
+
+impl<'dr, D: Driver<'dr>> KySource for TwoProofKySource<'dr, D> {
+    type Ky = Element<'dr, D>;
+
+    fn raw_c(&self) -> impl Iterator<Item = Element<'dr, D>> {
+        once(self.left_raw_c.clone()).chain(once(self.right_raw_c.clone()))
+    }
+
+    fn application_ky(&self) -> impl Iterator<Item = Element<'dr, D>> {
+        once(self.left_app.clone()).chain(once(self.right_app.clone()))
+    }
+
+    fn unified_bridge_ky(&self) -> impl Iterator<Item = Element<'dr, D>> {
+        once(self.left_bridge.clone()).chain(once(self.right_bridge.clone()))
+    }
+
+    fn unified_ky(&self) -> impl Iterator<Item = Element<'dr, D>> + Clone {
+        once(self.left_unified.clone()).chain(once(self.right_unified.clone()))
+    }
+
+    fn ones(&self) -> impl Iterator<Item = Element<'dr, D>> + Clone {
+        once(self.one.clone()).chain(once(self.one.clone()))
+    }
+
+    fn zero(&self) -> Element<'dr, D> {
+        self.zero.clone()
+    }
+}

@@ -1,0 +1,44 @@
+{
+  "recorded_date": "2026-10-20",
+  "environment": "Windows, Python 3.11.9; Python standard library only",
+  "working_directory": "outputs/build-halo-lab",
+  "executed": [
+    {
+      "command": "python tests/assessment.py --candidate lessons/ipa/solution.py --self-test",
+      "exit_code": 0,
+      "passed": 8,
+      "total": 8,
+      "checks": [
+        {"test": "known_witness", "passed": true},
+        {"test": "random_witness", "passed": true},
+        {"test": "bases", "passed": true},
+        {"test": "update", "passed": true},
+        {"test": "identity", "passed": true},
+        {"test": "reduction", "passed": true},
+        {"test": "rejections", "passed": true},
+        {"test": "immutability", "passed": true}
+      ],
+      "reference_passed": 8,
+      "mutations": [
+        {"mutant": "swapped_witness_challenges", "rejected": true},
+        {"mutant": "swapped_generator_challenges", "rejected": true},
+        {"mutant": "omitted_R_term", "rejected": true},
+        {"mutant": "unsquared_challenges", "rejected": true},
+        {"mutant": "all_zero_witness", "rejected": true}
+      ]
+    },
+    {
+      "command": "python tests/assessment.py --candidate lessons/ipa/starter.py",
+      "exit_code": 1,
+      "passed": 0,
+      "total": 8,
+      "expected_failure": true,
+      "reason": "All categories fail with the starter's NotImplementedError functions."
+    }
+  ],
+  "limitations": [
+    "Assessment validates formal folding algebra, not cryptographic security.",
+    "A passing reference solution is not a learner-pilot result.",
+    "No external reviewer or learner participated in these automated checks."
+  ]
+}

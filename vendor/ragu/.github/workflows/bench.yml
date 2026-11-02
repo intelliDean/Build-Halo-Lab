@@ -1,0 +1,149 @@
+name: Benchmarks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      base_sha:
+        description: 'Baseline commit SHA for regression comparison (defaults to latest main)'
+        required: false
+        default: ''
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  changes:
+    name: detect changes
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3.0.3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - '**/*.rs'
+              - '**/Cargo.toml'
+              - '**/Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.github/workflows/bench.yml'
+              - '.github/actions/**'
+
+  # PR path: compile benchmarks only (no execution)
+  build:
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: ./.github/actions/rust-setup
+        with:
+          cache-suffix: bench
+
+      - name: Build benchmarks
+        run: cargo bench --workspace --all-features --locked --bench gungraun --no-run
+
+  # Push-to-main: full run + save baseline for future comparisons
+  # Manual dispatch: full run + regression summary against a chosen baseline
+  bench:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: ./.github/actions/rust-setup
+        with:
+          cache-suffix: bench
+          cargo-tools: gungraun-runner@0.17.0
+          apt-packages: valgrind
+
+      - name: Resolve baseline SHA
+        if: github.event_name == 'workflow_dispatch'
+        id: baseline
+        env:
+          INPUT_BASE_SHA: ${{ inputs.base_sha }}
+        run: |
+          if [ -n "$INPUT_BASE_SHA" ]; then
+            echo "sha=$INPUT_BASE_SHA" >> "$GITHUB_OUTPUT"
+          else
+            git fetch origin main --depth=1
+            echo "sha=$(git rev-parse origin/main)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Load baseline
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: target/gungraun
+          key: never-${{ github.sha }}-${{ github.run_id }}
+          restore-keys: bench-${{ steps.baseline.outputs.sha }}
+
+      - name: Clean benchmark summaries
+        run: |
+          mkdir -p target/gungraun
+          find target/gungraun -name 'summary.json' -delete
+
+      - name: Run benchmarks
+        run: cargo bench --workspace --all-features --locked --bench gungraun -- --save-summary=json
+
+      - name: Summarize benchmark regressions
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          ALERT_THRESHOLD: '1.5'
+        run: |
+          set -euo pipefail
+          REGRESSIONS=$(find target/gungraun -name 'summary.json' -exec cat {} + \
+            | jq --slurp --from-file .github/scripts/extract-regressions.jq \
+                --argjson threshold "$ALERT_THRESHOLD")
+          if [ "$(jq 'length' <<< "$REGRESSIONS")" -gt 0 ]; then
+            {
+              echo "## ⚠️ Performance Regression Detected"
+              echo
+              echo "Benchmarks exceeding **${ALERT_THRESHOLD}x** baseline:"
+              echo
+              jq --raw-output --from-file .github/scripts/format-regressions.jq <<< "$REGRESSIONS"
+            } >> "$GITHUB_STEP_SUMMARY"
+            jq --raw-output \
+              '.[] | "::warning title=Benchmark Regression::\(.name) regressed \(.ratio * 100 | round / 100)x baseline (current \(.current), baseline \(.baseline))"' \
+              <<< "$REGRESSIONS"
+          fi
+
+      - name: Upload benchmark results artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: gungraun-results
+          path: target/gungraun
+          retention-days: 1
+
+      - name: Save baseline
+        if: github.event_name == 'push'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: target/gungraun
+          key: bench-${{ github.sha }}

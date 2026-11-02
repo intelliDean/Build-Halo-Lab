@@ -1,0 +1,381 @@
+//! Unified interface for writing cryptographic protocols and arithmetic
+//! circuits in Ragu.
+//!
+//! The fundamental interface of Ragu is [`Driver`], a trait that describes an
+//! interpreter for cryptographic protocols and arithmetic circuit code. Nearly
+//! all protocols in Ragu are implemented in terms of drivers, enabling most of
+//! the codebase to share a common execution model.
+//!
+//! Drivers create wires, compute assignments when available, and enforce
+//! constraints. Circuit code that is generic over a driver must emit the same
+//! constraints independently of values carried through [`DriverValue`]. Drivers
+//! use a [`Maybe<T>`] type to statically gate witness generation, and define
+//! their own opaque [`Driver::Wire`] type so that monomorphized code inherits
+//! driver-specific optimizations. Drivers can execute circuit code within
+//! [routines](crate::routines), which grant them flexibility for
+//! parallelization, memoization, and other optimizations via
+//! [`WireMap`](crate::convert::WireMap).
+//!
+//! * **Integration of witness generation**: Constraints can be written
+//!   alongside witness-generation logic, even though drivers tend to reason
+//!   about one or the other. To reduce overhead, drivers specify a [`Maybe<T>`]
+//!   type (via the type alias [`DriverValue`]) which enables static analysis
+//!   and optimization of driver-managed value handling for a specific context.
+//!   This coupling with witness generation is a zero-cost abstraction.
+//! * **Integration of in-circuit and out-of-circuit code**: Recursive proofs
+//!   require many algorithms to be executed both within and outside of
+//!   circuits, and these implementations must remain consistent for
+//!   completeness. The driver abstraction allows these algorithms to be written
+//!   once and reused in both contexts with minimal overhead.
+//! * **Specialization of wire types**: Drivers define their own (opaque) wire
+//!   type [`Driver::Wire`], which users can only clone. Driver-specific wire
+//!   types allow simpler implementations of drivers for a wider variety of
+//!   contexts. The optimal representation of wires can vary widely: they might
+//!   be smart pointers, partial polynomial evaluations, assignment values, or
+//!   even just the unit type `()`. Monomorphized circuit code inherits memory
+//!   and performance optimizations from these specializations.
+//!
+//! ### Routines
+//!
+//! Drivers can execute circuit code within well-defined abstraction
+//! boundaries called [routines](crate::routines). In exchange for a slightly
+//! stricter API, users can give drivers flexibility in how circuit execution is
+//! performed---permitting aggressive parallelization, memoization and other
+//! optimizations. Routines use [`WireMap`](crate::convert::WireMap) to
+//! translate gadgets from one driver to another during these conversions.
+//!
+//! See also the [book] for a user-oriented introduction to drivers.
+//!
+//! [book]: https://tachyon.z.cash/ragu/guide/drivers/
+
+mod coeff;
+pub mod emulator;
+mod linexp;
+mod phantom;
+
+pub use coeff::Coeff;
+pub use linexp::{DirectSum, LinearExpression};
+use udon::field::Field;
+
+use crate::{
+    Result,
+    gadgets::Bound,
+    maybe::{Maybe, MaybeKind, Perhaps},
+    routines::Routine,
+};
+
+/// Alias for the concrete [`Maybe<T>`] type for a driver `D`.
+///
+/// Circuit APIs use this for witness input, witness data, and public instance
+/// data that may or may not be available in a particular driver context.
+pub type DriverValue<D, T> = Perhaps<<D as DriverTypes>::MaybeKind, T>;
+
+/// Associated types and low-level gate allocation for a [`Driver`], without
+/// binding the `'dr` lifetime.
+///
+/// `Driver<'dr>` re-exports some of these types (as [`Driver::F`] and
+/// [`Driver::Wire`]) but deliberately omits others:
+/// [`MaybeKind`](Self::MaybeKind), [`LCadd`](Self::LCadd), and
+/// [`LCenforce`](Self::LCenforce) are implementation details that circuit code
+/// rarely needs to mention by name. Placing them here keeps `Driver<'dr>`
+/// focused on its core API while still making the types available to
+/// infrastructure that needs them.
+///
+/// The [`gate`](Self::gate) method also lives here because it is an
+/// implementor-facing detail: circuit code should call [`Driver::mul`] instead,
+/// which wraps `gate` and drops the auxiliary $D$ wire.
+///
+/// The lifetime-free aspect is equally important: the [`DriverValue`] type
+/// alias and [wire-map conversions](crate::convert) both reference
+/// `DriverTypes` associated types without requiring `'dr`, so they can be
+/// defined and used in contexts where no driver lifetime is in scope.
+///
+/// Circuit code should bound on `Driver<'dr>`, not `DriverTypes`. This trait is
+/// relevant when writing driver implementations, conversion helpers, or other
+/// abstractions that must be lifetime-polymorphic over drivers.
+pub trait DriverTypes {
+    /// The field that this driver operates over.
+    type ImplField: Field;
+
+    /// The type of wire that this driver provides.
+    type ImplWire: Clone;
+
+    /// The kind of [`Maybe<T>`] types for driver-managed values, including
+    /// witness input, witness data, and public instance data.
+    type MaybeKind: MaybeKind;
+
+    /// The concrete [`LinearExpression`] type used by [`Driver::add`].
+    ///
+    /// Because `add` accepts a closure `Fn(Self::LCadd) -> Self::LCadd`, Rust
+    /// requires the expression type to be named in the trait hierarchy even
+    /// though circuit code never refers to it directly. See the
+    /// [book](https://tachyon.z.cash/ragu/guide/drivers/linear.html#the-closure-pattern)
+    /// for detail on the closure pattern.
+    type LCadd: LinearExpression<Self::ImplWire, Self::ImplField>;
+
+    /// The concrete [`LinearExpression`] type used by [`Driver::enforce_zero`].
+    ///
+    /// Exposed for the same reason as [`LCadd`](Self::LCadd): Rust requires
+    /// the concrete type to appear in the trait hierarchy because
+    /// `enforce_zero` accepts a closure parameterized over it.
+    type LCenforce: LinearExpression<Self::ImplWire, Self::ImplField>;
+
+    /// An opaque token for the $D$ wire of a gate. Returned by
+    /// [`gate`](Self::gate) and consumed by
+    /// [`assign_extra`](Self::assign_extra).
+    ///
+    /// Drivers assign $D = 0$ at [`gate`](Self::gate) time. Passing the
+    /// token to [`assign_extra`](Self::assign_extra) overrides that default;
+    /// dropping it keeps $D = 0$.
+    type Extra;
+
+    /// Allocates the wires $(A, B, C)$ with the constraint $A \cdot B = C$
+    /// and returns an [`Extra`](Self::Extra) token for the auxiliary $D$ wire.
+    /// The gate also imposes the constraint $C \cdot D = 0$. The $D$ wire is
+    /// assigned to zero by default, which trivially satisfies this. When $C$
+    /// is guaranteed to be zero, $D$ becomes unconstrained and available for
+    /// use via [`assign_extra`](Self::assign_extra).
+    ///
+    /// Circuit code should prefer [`Driver::mul`], which delegates to this
+    /// method by default and discards the `Extra`. Only code that needs an
+    /// unconstrained $D$ wire should call `gate` directly.
+    ///
+    /// The `values` closure must return assignments $(a, b, c)$ for the wires
+    /// $(A, B, C)$ satisfying $a \cdot b = c$. Drivers are not required to
+    /// check this equation, and most do not.
+    ///
+    /// The provided closure may be called by the driver if assignments are
+    /// needed. If it is called, any errors are propagated from it, and the
+    /// closure can rely on [`Witness<Self, T>::take`](crate::maybe::Maybe::take)
+    /// succeeding unconditionally.
+    ///
+    /// # Purity
+    ///
+    /// The `Fn` bound signals that this closure should be side-effect-free:
+    /// emitted constraints must be identical regardless of whether the driver
+    /// invokes it. `Fn` prevents accidental `&mut` captures but does not
+    /// prevent interior mutability; for drivers with `MaybeKind = Empty`, the
+    /// [`Maybe`]/[`DriverValue`] system provides a
+    /// stronger guarantee—those drivers never call this closure, and its body
+    /// is dead-code-eliminated after monomorphization.
+    ///
+    /// # Errors
+    ///
+    /// Returns any error produced by `values`, or any error from the driver
+    /// while allocating the gate.
+    fn gate(
+        &mut self,
+        values: impl Fn() -> Result<(
+            Coeff<Self::ImplField>,
+            Coeff<Self::ImplField>,
+            Coeff<Self::ImplField>,
+        )>,
+    ) -> Result<(Self::ImplWire, Self::ImplWire, Self::ImplWire, Self::Extra)>;
+
+    /// Overrides the default $D = 0$ assignment for a gate, consuming the
+    /// [`Extra`](Self::Extra) token returned by [`gate`](Self::gate) and
+    /// returning the $D$ wire.
+    ///
+    /// The gate's $C \cdot D = 0$ constraint remains in force: a non-zero
+    /// assignment is only valid when the gate's $C$ wire is assigned zero.
+    /// Drivers are not required to check this, and most do not.
+    ///
+    /// The provided closure follows the same purity contract as [`gate`](Self::gate):
+    /// it may be called zero or more times, should be side-effect-free, and
+    /// errors propagate to the caller.
+    ///
+    /// # Errors
+    ///
+    /// Returns any error produced by `value`, or any error from the driver
+    /// while assigning the auxiliary wire.
+    fn assign_extra(
+        &mut self,
+        extra: Self::Extra,
+        value: impl Fn() -> Result<Coeff<Self::ImplField>>,
+    ) -> Result<Self::ImplWire>;
+}
+
+/// A context for executing cryptographic algorithms and emitting their
+/// corresponding arithmetic-circuit constraints.
+///
+/// Drivers are used to write code that emits arithmetic-circuit constraints
+/// over a field determined by the [`Driver::F`] associated type. Arithmetic
+/// circuits are represented in Ragu as multiplication gates, linear
+/// constraints, coefficients, and wire references over assigned field values.
+///
+/// ## Usage
+///
+/// * Wires can be created with the [`mul`](Driver::mul) method. The
+///   [`add`](Driver::add) method can create a virtual wire that is defined
+///   as a linear combination of some
+///   existing wires. The [`constant`](Driver::constant) method is a helper for
+///   creating a wire with a constant value.
+/// * Wires are assigned values upon their creation; the driver may or may not
+///   need to obtain these values depending on whether witness generation is
+///   active.
+/// * Users keep track of wire assignments or related witness data using a
+///   driver-specific [`DriverValue`] type. This type implements an
+///   `Option`-like abstraction called [`Maybe`] which allows for compile-time
+///   optimization and static analysis of witness-generation computation and
+///   memory.
+/// * Finally, and most importantly, wires can be constrained in two ways:
+///     * The [`mul`](Driver::mul) method enforces a multiplicative constraint
+///       on the created wires; the wires are the inputs and output of a
+///       multiplication gate of an arithmetic circuit.
+///     * The [`enforce_zero`](Driver::enforce_zero) method can be used to
+///       require that a linear combination of wires equals zero.
+///
+/// ## `'dr` lifetime
+///
+/// Drivers are parameterized by a lifetime `'dr`. Routines are constrained to
+/// outlive this lifetime so that references to non-`'static` parameters or
+/// driver-managed values can be placed inside of them while still allowing
+/// drivers to use multithreaded execution. See the [book section on
+/// `'dr`][dr-lifetime]
+/// for more detail.
+///
+/// [dr-lifetime]: https://tachyon.z.cash/ragu/guide/drivers/#the-dr-lifetime
+///
+/// # Supertrait: `DriverTypes`
+///
+/// `Driver<'dr>` requires [`DriverTypes`], which collects the associated types
+/// that can be named without binding `'dr`, along with the low-level
+/// [`gate`](DriverTypes::gate) method. Some of those types (`ImplField`,
+/// `ImplWire`) are re-exported here as [`F`](Self::F) and [`Wire`](Self::Wire);
+/// others ([`MaybeKind`](DriverTypes::MaybeKind),
+/// [`LCadd`](DriverTypes::LCadd), [`LCenforce`](DriverTypes::LCenforce))
+/// remain on `DriverTypes` only, since circuit code rarely needs to refer to
+/// them. The `gate` method lives on `DriverTypes` because it is an
+/// implementor-facing detail—circuit code should call [`mul`](Self::mul)
+/// instead. Infrastructure that must name a driver's types without binding
+/// `'dr`—see the [`convert`](crate::convert) module—bounds on `DriverTypes`
+/// instead.
+pub trait Driver<'dr>: DriverTypes<ImplWire = Self::Wire, ImplField = Self::F> + Sized {
+    /// The field that this driver operates over.
+    type F: Field;
+
+    /// The type of wire that this driver provides. These values are
+    /// deliberately opaque to users: they can be cloned, but they cannot be
+    /// compared or manipulated in any other way.
+    type Wire: Clone;
+
+    /// Drivers guarantee that a fixed wire is assigned the value $1$.
+    const ONE: Self::Wire;
+
+    /// Returns a virtual wire that has a fixed constant value.
+    fn constant(&mut self, value: Coeff<Self::F>) -> Self::Wire {
+        self.add(|lc| lc.add_term(&Self::ONE, value))
+    }
+
+    /// Asks the driver to allocate the wires $(A, B, C)$ with the constraint
+    /// $A \cdot B = C$.
+    ///
+    /// This is a convenience wrapper around [`DriverTypes::gate`] that drops
+    /// the auxiliary $D$ wire. Most circuit code should use this method.
+    ///
+    /// The `values` closure must return assignments $(a, b, c)$ for the wires
+    /// $(A, B, C)$ satisfying $a \cdot b = c$. Drivers are not required to
+    /// check this equation, and most do not.
+    ///
+    /// The provided closure may be called by the driver if an assignment is
+    /// needed. If it is called, any errors are propagated from it, and the
+    /// closure can rely on [`Witness<Self, T>::take`](Maybe::take) succeeding
+    /// unconditionally.
+    ///
+    /// # Purity
+    ///
+    /// The `Fn` bound signals that this closure should be side-effect-free:
+    /// emitted constraints must be identical regardless of whether the driver
+    /// invokes it. `Fn` prevents accidental `&mut` captures but does not
+    /// prevent interior mutability; for drivers with `MaybeKind = Empty`, the
+    /// [`Maybe`]/[`DriverValue`] system provides a stronger guarantee—those
+    /// drivers never call this closure, and its body is dead-code-eliminated
+    /// after monomorphization.
+    ///
+    /// # Errors
+    ///
+    /// Returns any error produced by `values`, or any error from the
+    /// underlying [`DriverTypes::gate`] call.
+    fn mul(
+        &mut self,
+        values: impl Fn() -> Result<(Coeff<Self::F>, Coeff<Self::F>, Coeff<Self::F>)>,
+    ) -> Result<(Self::Wire, Self::Wire, Self::Wire)> {
+        let (a, b, c, _) = self.gate(values)?;
+        Ok((a, b, c))
+    }
+
+    /// Asks the driver to create a virtual wire that is the linear combination
+    /// of some existing wires. This may impose some runtime cost depending on
+    /// the driver. However, it is relatively "free" to perform this operation
+    /// as it does not require an actual constraint to be created, since
+    /// unlimited fan-in addition gates do not have a cost in `ragu`'s circuit
+    /// model.
+    ///
+    /// The provided closure _may_ be called to obtain the linear combination.
+    ///
+    /// # Purity
+    ///
+    /// The `Fn` bound signals that this closure should be side-effect-free, as
+    /// with [`mul`](Driver::mul). Unlike witness-providing closures, however,
+    /// drivers with `MaybeKind = Empty` still call expression-building closures
+    /// when they need constraint structure, so `Fn` is the sole type-level
+    /// purity signal here.
+    fn add(&mut self, lc: impl Fn(Self::LCadd) -> Self::LCadd) -> Self::Wire;
+
+    /// Asks the driver to create a constraint that a linear combination of
+    /// wires equals zero.
+    ///
+    /// The provided closure _may_ be called to obtain the linear combination.
+    ///
+    /// # Purity
+    ///
+    /// The `Fn` bound signals purity for the same reasons as
+    /// [`add`](Driver::add); the driver-provided
+    /// [`LCenforce`](DriverTypes::LCenforce) argument may itself carry
+    /// interior-mutable state (as a driver implementation detail), but circuit
+    /// code should not introduce its own observable side effects.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the driver cannot record the constraint.
+    fn enforce_zero(&mut self, lc: impl Fn(Self::LCenforce) -> Self::LCenforce) -> Result<()>;
+
+    /// Enforces that two wires are equal.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error from [`Driver::enforce_zero`].
+    fn enforce_equal(&mut self, a: &Self::Wire, b: &Self::Wire) -> Result<()> {
+        self.enforce_zero(|lc| lc.add(a).sub(b))
+    }
+
+    /// Proxy for the [`Maybe::just`] method for this driver.
+    fn just<R: Send>(f: impl FnOnce() -> R) -> DriverValue<Self, R> {
+        <DriverValue<Self, R> as Maybe<R>>::just(f)
+    }
+
+    /// Proxy for the [`Maybe::try_just`] method for this driver.
+    fn try_just<R: Send>(f: impl FnOnce() -> Result<R>) -> Result<DriverValue<Self, R>> {
+        <DriverValue<Self, R> as Maybe<R>>::try_just(f)
+    }
+
+    /// Convenience method returning a unit [`DriverValue`]. Equivalent to
+    /// `D::just(|| ())`.
+    fn unit() -> DriverValue<Self, ()> {
+        Self::just(|| ())
+    }
+
+    /// Executes a routine with this driver.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error from routine prediction or execution.
+    fn routine<R: Routine<Self::F> + 'dr>(
+        &mut self,
+        routine: R,
+        input: Bound<'dr, Self, R::Input>,
+    ) -> Result<Bound<'dr, Self, R::Output>> {
+        let aux = emulator::Emulator::predict(&routine, &input)?.into_aux();
+        routine.execute(self, input, aux)
+    }
+}

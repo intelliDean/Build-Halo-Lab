@@ -1,0 +1,37 @@
+[book]
+authors = ["Sean Bowe"]
+language = "en"
+src = "src"
+title = "The Ragu Book"
+
+[preprocessor.katex]
+macros = "macros.txt"
+after = ["links"]
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
+
+[preprocessor.admonish]
+command = "mdbook-admonish"
+assets_version = "3.0.0"
+
+[preprocessor.todo]
+# Use mdBook's root from stdin rather than the caller's working directory.
+# Explicit renderers bypass the `supports` probe, which receives no context.
+command = '''python3 -c "import json, runpy, sys; context, book = json.load(sys.stdin); process = runpy.run_path(context['root'] + '/preprocessor-todo.py')['process']; json.dump(process(context, book), sys.stdout)"'''
+renderers = ["html"]
+after = ["links"]
+
+[output]
+
+[output.html]
+additional-js = ["mermaid.min.js", "mermaid-init.js", "todo.js"]
+default-theme = "rust"
+preferred-dark-theme = "rust"
+additional-css = ["custom.css"]
+hash-files = true
+
+# Enable these to generate links with mdbook-rustdoc-link
+# Do not check in these uncommented.
+# [preprocessor.rustdoc-link]
+# after = ["links"]

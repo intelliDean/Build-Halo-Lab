@@ -1,0 +1,45 @@
+[package]
+name = "ragu_core"
+version.workspace = true
+authors.workspace = true
+description = "Fundamental traits and types for writing protocols and arithmetic circuits; intended for internal use in the Ragu project"
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+readme = "README.md"
+homepage.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/ragu_core"
+categories = [
+  "cryptography",
+  "development-tools",
+  "algorithms",
+  "science",
+  "no-std",
+]
+keywords = ["cryptography", "zero-knowledge", "circuits", "gadgets", "pcd"]
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--html-in-header", "katex-header.html"]
+all-features = true
+
+[features]
+alloc = []
+default = ["alloc"]
+multicore = ["maybe-rayon/threads", "std"]
+std = []
+
+[lib]
+bench = false
+
+[dependencies]
+maybe-rayon = { workspace = true }
+udon = { workspace = true }
+ragu_macros = { path = "../ragu_macros", version = "0.0.0" }
+thiserror = { version = "2.0.12", default-features = false }
+
+[dev-dependencies]
+rand = { workspace = true }
+proptest = { workspace = true }
+ragu_testing = { path = "../ragu_testing", version = "0.0.0" }

@@ -1,0 +1,106 @@
+//! # `ragu_primitives`
+//!
+//! This crate contains low level gadgets and algorithms for the Ragu project.
+//! This API is re-exported (as necessary) in other crates and so this crate is
+//! only intended to be used internally by Ragu.
+
+#![no_std]
+#![allow(clippy::type_complexity)]
+#![deny(rustdoc::broken_intra_doc_links)]
+#![deny(missing_docs)]
+#![doc(html_favicon_url = "https://tachyon.z.cash/assets/ragu/v1/favicon-32x32.png")]
+#![doc(html_logo_url = "https://tachyon.z.cash/assets/ragu/v1/rustdoc-128x128.png")]
+
+#[cfg(not(feature = "alloc"))]
+compile_error!("`ragu_primitives` requires the `alloc` feature to be enabled.");
+extern crate alloc;
+
+extern crate self as ragu_primitives;
+
+pub mod allocator;
+mod boolean;
+pub mod comparison;
+pub mod consistent;
+mod element;
+mod endoscalar;
+mod foreign;
+mod invertible;
+pub mod io;
+mod point;
+pub mod poseidon;
+pub mod promotion;
+mod sendable;
+mod simulator;
+pub mod suffix;
+mod util;
+pub mod vec;
+
+pub use boolean::{Boolean, multipack};
+pub use element::{Element, multiadd};
+pub use endoscalar::{
+    Endoscalar, EndoscalarChallenge, EndoscalarRangeError, extract_endoscalar, lift_endoscalar,
+};
+pub use invertible::{Invertible, Nonzero, NonzeroBank};
+use io::{Buffer, Write};
+pub use point::Point;
+use promotion::Demoted;
+use ragu_core::{Result, drivers::Driver, gadgets::Gadget};
+pub use sendable::Sendable;
+pub use simulator::Simulator;
+pub use suffix::WithSuffix;
+
+/// Extension trait that adds wire-contract-aware equality
+/// ([`enforce_equal`](GadgetExt::enforce_equal)), serialization
+/// ([`write`](GadgetExt::write)), and witness-stripping
+/// ([`demote`](GadgetExt::demote)) to all supporting gadgets.
+pub trait GadgetExt<'dr, D: Driver<'dr>>: Gadget<'dr, D> {
+    /// Enforce equality with another gadget, using this gadget's
+    /// [`comparison::GadgetEquals`] implementation.
+    ///
+    /// This is the ordinary equality operation for circuit code working with
+    /// constructed gadgets. It may be more efficient than the conservative
+    /// [`Gadget::enforce_conservative_equal`] check by using the gadget's
+    /// representation and wire contracts.
+    fn enforce_equal<D2: Driver<'dr, F = D::F, Wire = D::Wire>>(
+        &self,
+        dr: &mut D2,
+        other: &Self,
+    ) -> Result<()>
+    where
+        Self::Kind: comparison::GadgetEquals<D::F>,
+    {
+        <Self::Kind as comparison::GadgetEquals<D::F>>::enforce_equal_gadget::<D2, D>(
+            dr, self, other,
+        )
+    }
+
+    /// Write this gadget into a buffer, assuming the gadget's
+    /// [`Kind`](Gadget::Kind) implements [`Write`].
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error from [`Write::write_gadget`].
+    fn write<B: Buffer<'dr, D>>(&self, dr: &mut D, buf: &mut B) -> Result<()>
+    where
+        Self::Kind: Write<D::F>,
+    {
+        <Self::Kind as Write<D::F>>::write_gadget(self, dr, buf)
+    }
+
+    /// Demotes this gadget by stripping its witness data.
+    fn demote(&self) -> Result<Demoted<'dr, D, Self>> {
+        Demoted::new(self)
+    }
+
+    /// Wrap this gadget in [`Sendable`], asserting it is [`Send`].
+    ///
+    /// This is only available when `D::Wire: Send`.
+    fn sendable(self) -> Sendable<Self>
+    where
+        D::Wire: Send,
+    {
+        Sendable::new::<D>(self)
+    }
+}
+
+impl<'dr, D: Driver<'dr>, G: Gadget<'dr, D>> GadgetExt<'dr, D> for G {}

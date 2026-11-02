@@ -1,0 +1,18 @@
+test_command_must_match_requested_command (test_acceptance.CompletedProcessContractTests.test_command_must_match_requested_command) ... ok
+test_exact_application_rejections_pass (test_acceptance.CompletedProcessContractTests.test_exact_application_rejections_pass) ... ok
+test_expected_statement_is_independent_and_exact (test_acceptance.CompletedProcessContractTests.test_expected_statement_is_independent_and_exact) ... ok
+test_full_stdout_must_be_one_unambiguous_json_object (test_acceptance.CompletedProcessContractTests.test_full_stdout_must_be_one_unambiguous_json_object) ... ok
+test_generic_exit_one_errors_never_count_as_proof_rejections (test_acceptance.CompletedProcessContractTests.test_generic_exit_one_errors_never_count_as_proof_rejections) ... ok
+test_invalid_validator_contract_fails_closed (test_acceptance.CompletedProcessContractTests.test_invalid_validator_contract_fails_closed) ... ok
+test_panics_signals_and_windows_crashes_never_count_as_rejections (test_acceptance.CompletedProcessContractTests.test_panics_signals_and_windows_crashes_never_count_as_rejections) ... ok
+test_positive_contract_from_real_subprocess (test_acceptance.CompletedProcessContractTests.test_positive_contract_from_real_subprocess) ... ok
+test_positive_verification_contract (test_acceptance.CompletedProcessContractTests.test_positive_verification_contract) ... ok
+test_rejection_must_have_empty_stdout (test_acceptance.CompletedProcessContractTests.test_rejection_must_have_empty_stdout) ... ok
+test_success_rejects_any_nonzero_status_or_stderr (test_acceptance.CompletedProcessContractTests.test_success_rejects_any_nonzero_status_or_stderr) ... ok
+test_terminal_checks_require_boolean_true (test_acceptance.CompletedProcessContractTests.test_terminal_checks_require_boolean_true) ... ok
+test_verified_requires_boolean_true_not_truthiness (test_acceptance.CompletedProcessContractTests.test_verified_requires_boolean_true_not_truthiness) ... ok
+
+----------------------------------------------------------------------
+Ran 13 tests in 0.079s
+
+OK

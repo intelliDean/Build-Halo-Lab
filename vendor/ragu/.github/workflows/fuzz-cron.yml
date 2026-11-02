@@ -1,0 +1,563 @@
+name: Continuous fuzzing
+
+# Runs every fuzz target for a bounded budget on a scheduled cadence.
+# The per-PR `fuzz harness check (nightly)` job in `rust.yml` executes the
+# support and patcher regression tests and checks target compilation. This
+# workflow runs libFuzzer campaigns, accumulates a corpus across runs, and
+# surfaces any crash as a failed job + uploaded artifact.
+
+on:
+  # Three times weekly: Sundays, Wednesdays, and Fridays at 00:00 UTC.
+  # Spreading the runs gives libFuzzer fresh mutation randomness on each
+  # fire (while still accumulating the corpus across runs via cache),
+  # which empirically outperforms single long runs for shallow-bug
+  # discovery and bounds the gap between campaigns to three days.
+  schedule:
+    - cron: '0 0 * * 0'
+    - cron: '0 0 * * 3'
+    - cron: '0 0 * * 5'
+    # Saturdays: the `hardening` sweep instead of the logic-bug campaign.
+    # Its own day so the two never contend for runners, and so a hardening
+    # failure is legible as one at a glance in the Actions list.
+    - cron: '0 0 * * 6'
+  # Ad-hoc trigger from the Actions tab.
+  workflow_dispatch:
+    inputs:
+      duration:
+        # Empty by default so each target keeps its own budget (18000 s,
+        # or the matrix override); a value here applies to every target.
+        description: 'Seconds per target (empty = per-target default, 18000 = 5 hours)'
+        required: false
+        default: ''
+      use_dict:
+        description: 'Pass -dict=dict.txt to libFuzzer'
+        type: boolean
+        required: false
+        default: false
+      run_hardening:
+        description: 'Also run the sanitizer / resource-exhaustion sweep'
+        type: boolean
+        required: false
+        default: false
+      hardening_duration:
+        description: 'Seconds per target per flavor in the hardening sweep (default 900)'
+        required: false
+        default: '900'
+
+permissions:
+  contents: read
+
+jobs:
+  source-lint:
+    name: circuit source lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned nightly toolchain
+        id: nightly
+        uses: ./.github/actions/rust-nightly-setup
+
+      - name: Cache source-lint build artifacts
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: qa/fuzz/target
+          key: ${{ runner.os }}-fuzz-source-lint-target-${{ hashFiles('qa/fuzz/Cargo.lock', 'qa/fuzz/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-fuzz-source-lint-target-
+
+      - name: Run no-execution circuit source lint
+        working-directory: qa/fuzz
+        env:
+          RUSTUP_TOOLCHAIN: ${{ steps.nightly.outputs.toolchain }}
+        run: cargo run --locked --bin circuit_lint -- --deny-advisories
+
+  fuzz:
+    name: fuzz ${{ matrix.target }}
+    needs: source-lint
+    # Saturday belongs to `hardening`; every other fire is this campaign.
+    if: github.event.schedule != '0 0 * * 6'
+    runs-on: ubuntu-latest
+    # GitHub-hosted runners have a 6-hour (360-minute) hard ceiling per
+    # job. Setting timeout-minutes to that maximum gives the 5-hour
+    # fuzz budget ~1 hour of headroom for build, cache restore,
+    # cargo-fuzz install, and the bounded corpus minimization below.
+    # Manual dispatches that pass `duration` higher than 18000 will hit
+    # the hard ceiling and be killed.
+    timeout-minutes: 360
+    strategy:
+      # Each target is independent; let the others continue if one finds a
+      # bug. Crashes surface via uploaded artifacts, not by cascading
+      # cancellations.
+      fail-fast: false
+      matrix:
+        target:
+          - fuzz_element_ops
+          - fuzz_witness_coverage
+          - fuzz_witness_cheat
+          - fuzz_driver_metamorphic
+          - fuzz_algebraic_identities
+          - fuzz_element_assertions
+          - fuzz_multipack
+          - fuzz_point_identities
+          - fuzz_consistent
+          - fuzz_io_roundtrip
+          - fuzz_poseidon_sponge
+          - fuzz_poseidon_differential
+          - fuzz_endoscalar
+          - fuzz_revdot
+          - fuzz_fold_revdot
+          - fuzz_sxy_agreement
+          - fuzz_circuit_witness
+          - fuzz_circuit_revdot_identity
+          - fuzz_staging
+          - fuzz_verify_reject
+          - fuzz_verify_reject_full
+          - fuzz_pcd_lifecycle
+          - fuzz_witness_pinning
+          - fuzz_circuit_cheat
+          - fuzz_advice_patcher
+          - fuzz_internal_circuits
+          - fuzz_completeness
+          - fuzz_registry
+        # Per-target overrides; everything else takes the defaults the run
+        # step spells out.
+        include:
+          # Costs seconds per input, so some units cross the 120-second
+          # default and libFuzzer files them as timeouts rather than as
+          # slow inputs (#887).
+          - target: fuzz_pcd_lifecycle
+            input_timeout: 600
+          # Synthesizes real circuits. After the Udon migration the build,
+          # a five-hour campaign and the bounded cmin no longer fit under
+          # the six-hour ceiling, and the cancellation lands before the
+          # corpus is saved, so the next run restores a stale cache (#887).
+          - target: fuzz_internal_circuits
+            duration: 14400
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned nightly toolchain
+        id: nightly
+        uses: ./.github/actions/rust-nightly-setup
+
+      - name: Cache fuzz build artifacts
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: qa/fuzz/target
+          key: ${{ runner.os }}-fuzz-cron-target-${{ hashFiles('qa/fuzz/Cargo.toml') }}-${{ hashFiles('qa/fuzz/fuzz_targets/**/*.rs') }}-${{ hashFiles('qa/fuzz/bin/**/*.rs') }}
+          restore-keys: |
+            ${{ runner.os }}-fuzz-cron-target-
+
+      # Per-target corpus: the run-id key never matches an existing entry,
+      # so restore-keys' prefix match pulls the most recent prior corpus;
+      # the run extends it, and the explicit save step below uploads it as
+      # a fresh entry. Split restore/save (rather than the combined cache
+      # action) so the save still happens when the job fails — a
+      # crash-finding run is exactly the one whose corpus progress we
+      # most want to keep.
+      - name: Restore fuzz corpus
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: qa/fuzz/corpus/${{ matrix.target }}
+          key: ${{ runner.os }}-fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-fuzz-corpus-${{ matrix.target }}-
+
+      - name: Install cargo-fuzz
+        # Keep this pin in sync with fuzz-coverage.yml. `--locked` keeps the
+        # resolved dependency set reproducible across runs rather than
+        # drifting with whatever cargo-fuzz's manifest ranges admit today.
+        run: cargo install --locked cargo-fuzz@0.13.1
+
+      # Replay committed crash reproducers (one execution per file, no
+      # fuzzing) before spending the long fuzz budget. A regression here
+      # fails the job immediately.
+      - name: Replay regression inputs
+        working-directory: qa/fuzz
+        env:
+          RUSTUP_TOOLCHAIN: ${{ steps.nightly.outputs.toolchain }}
+          FUZZ_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          if compgen -G "regressions/${FUZZ_TARGET}/*" > /dev/null; then
+            cargo fuzz run --fuzz-dir . "$FUZZ_TARGET" regressions/"${FUZZ_TARGET}"/*
+          else
+            echo "No regression inputs for ${FUZZ_TARGET}; skipping."
+          fi
+
+      - name: Run fuzz target
+        working-directory: qa/fuzz
+        env:
+          DURATION: ${{ github.event.inputs.duration || matrix.duration || '18000' }}
+          INPUT_TIMEOUT: ${{ matrix.input_timeout || '120' }}
+          USE_DICT: ${{ github.event.inputs.use_dict || 'false' }}
+          # Route the toolchain through env (rustup picks it up
+          # automatically) rather than `cargo +TOOLCHAIN`, so the
+          # action output stays out of shell-interpolated text.
+          RUSTUP_TOOLCHAIN: ${{ steps.nightly.outputs.toolchain }}
+          FUZZ_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          # Reject anything other than the literal "true"/"false" the
+          # `type: boolean` input is supposed to produce, so a future
+          # loosening of the equality check can't smuggle other values.
+          case "$USE_DICT" in true|false) ;; *) echo "::error::USE_DICT must be 'true' or 'false', got '$USE_DICT'"; exit 1 ;; esac
+          DICT_FLAG=""
+          if [ "$USE_DICT" = "true" ]; then
+            # Regenerate dict.txt in case the constants drifted since the
+            # last manual regeneration.
+            cargo run --release --bin extract_dict > dict.txt
+            DICT_FLAG="-dict=dict.txt"
+          fi
+          # Corpus layout: corpus/<target>, cache-restored and receiving new
+          # units. `seeds/<target>` is merged in when it exists, which on a
+          # runner it never does — it is local-only, for warming up a laptop
+          # run. A cold corpus is not a problem here: the substrate's decoder
+          # is total, so libFuzzer bootstraps from nothing.
+          mkdir -p "corpus/${FUZZ_TARGET}"
+          CORPUS_DIRS="corpus/${FUZZ_TARGET}"
+          if [ -d "seeds/${FUZZ_TARGET}" ]; then
+            CORPUS_DIRS="${CORPUS_DIRS} seeds/${FUZZ_TARGET}"
+          fi
+          # Tee output so we can extract stats after the run regardless
+          # of whether the fuzz target crashed.
+          # Resource ceilings are spelled out rather than left to libFuzzer's
+          # defaults (-rss_limit_mb=2048, -malloc_limit_mb=rss_limit,
+          # -timeout=1200). Written down, they are reviewable and tunable;
+          # implicit, an OOM or a hang reads as an unexplained job failure.
+          # These are deliberately generous — this campaign hunts logic bugs,
+          # and `hardening` below is where tight limits do the squeezing.
+          # Targets that need more per-input time or a shorter campaign to
+          # fit the job ceiling say so in the matrix `include` above.
+          cargo fuzz run --fuzz-dir . "$FUZZ_TARGET" $CORPUS_DIRS -- \
+            $DICT_FLAG \
+            -max_len=1024 \
+            -rss_limit_mb=4096 \
+            -malloc_limit_mb=2048 \
+            -timeout="$INPUT_TIMEOUT" \
+            -max_total_time="$DURATION" 2>&1 | tee fuzz-run.log
+
+      - name: Save fuzz corpus
+        # always() so the corpus extension survives crash-finding (failed)
+        # runs; the combined cache action only saves on job success.
+        if: always()
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: qa/fuzz/corpus/${{ matrix.target }}
+          key: ${{ runner.os }}-fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+
+      # The cache above is the fast path and the *only* path the corpus had.
+      # GitHub evicts cache entries least-recently-used once the repository
+      # hits its storage limit, and this workflow writes a fresh run-scoped
+      # entry per target per campaign — three campaigns a week across the
+      # matrix, plus a separate coverage build family — so the corpora churn
+      # through that budget and vanish without a trace. Losing them is not
+      # only lost throughput: `fuzz-coverage` then finds nothing to replay.
+      #
+      # So the corpus is *also* uploaded as an artifact, which is not subject
+      # to LRU eviction and expires only on its retention clock. The coverage
+      # workflow falls back to it when the cache misses. The cache keeps
+      # everything the campaign accumulated and the artifact carries the
+      # minimized set, since the artifact is what gets downloaded and replayed.
+      - name: Minimize corpus
+        if: always()
+        working-directory: qa/fuzz
+        env:
+          RUSTUP_TOOLCHAIN: ${{ steps.nightly.outputs.toolchain }}
+          FUZZ_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          if [ -z "$(find "corpus/${FUZZ_TARGET}" -type f -print -quit 2>/dev/null)" ]; then
+            echo "No corpus to minimize for ${FUZZ_TARGET}."
+            exit 0
+          fi
+          BEFORE=$(find "corpus/${FUZZ_TARGET}" -type f | wc -l | tr -d ' ')
+          # Best-effort, and bounded. cmin re-executes every corpus unit, and
+          # on a target that costs seconds per input a few hundred units take
+          # longer than the hour the job has left after a five-hour campaign;
+          # unbounded, the job dies at the runner's six-hour ceiling with
+          # nothing uploaded. cargo-fuzz swaps the minimized corpus in only
+          # when the merge succeeds, so a pass that times out, like one that
+          # fails for any other reason, leaves the un-minimized corpus in
+          # place — and that is still worth uploading.
+          timeout 15m cargo fuzz cmin --fuzz-dir . "$FUZZ_TARGET" || true
+          AFTER=$(find "corpus/${FUZZ_TARGET}" -type f | wc -l | tr -d ' ')
+          echo "${FUZZ_TARGET}: ${BEFORE} -> ${AFTER} inputs"
+
+      - name: Upload minimized corpus
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: corpus-${{ matrix.target }}
+          path: qa/fuzz/corpus/${{ matrix.target }}/
+          # Longer than the crash window: this is the durable copy, and the
+          # coverage workflow reaches back to the most recent successful
+          # campaign for it.
+          retention-days: 90
+          if-no-files-found: warn
+
+      - name: Extract run stats
+        # Run even if the fuzz step crashed — we want stats artifacts
+        # uploaded for every scheduled run, success or failure.
+        if: always()
+        working-directory: qa/fuzz
+        env:
+          DURATION: ${{ github.event.inputs.duration || matrix.duration || '18000' }}
+          INPUT_TIMEOUT: ${{ matrix.input_timeout || '120' }}
+          USE_DICT: ${{ github.event.inputs.use_dict || 'false' }}
+          FUZZ_TARGET: ${{ matrix.target }}
+          RUN_ID: ${{ github.run_id }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          STATS="fuzz-stats-${FUZZ_TARGET}.txt"
+          {
+            echo "Target:   ${FUZZ_TARGET}"
+            echo "Run:      ${RUN_ID} (${EVENT_NAME})"
+            echo "Duration: ${DURATION}s"
+            echo "Timeout:  ${INPUT_TIMEOUT}s per input"
+            echo "Dict:     ${USE_DICT}"
+            echo ""
+            echo "=== Early NEW coverage events (up to 20) ==="
+            grep -E "^#[0-9]+\s+NEW" fuzz-run.log | head -20 || true
+            echo ""
+            echo "=== Early REDUCE / corpus-shrink events (up to 10) ==="
+            # REDUCE dominates when the corpus is already well-explored.
+            grep -E "^#[0-9]+\s+REDUCE" fuzz-run.log | head -10 || true
+            echo ""
+            echo "=== Final state (last 20 lines) ==="
+            tail -20 fuzz-run.log
+          } > "$STATS" 2>/dev/null || true
+
+          # Mirror the summary to the GitHub Actions job summary panel so
+          # it's visible without downloading the artifact.
+          {
+            echo "## fuzz_${FUZZ_TARGET}"
+            echo ""
+            echo '```'
+            tail -10 fuzz-run.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload run stats
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: stats-${{ matrix.target }}
+          # The full libFuzzer log rides along so a failure with no crash
+          # artifact can still be read after the job log expires.
+          path: |
+            qa/fuzz/fuzz-stats-${{ matrix.target }}.txt
+            qa/fuzz/fuzz-run.log
+          # Stats are tiny; keep them longer than crashes so we have a
+          # historical record across the 30-day crash-artifact window.
+          retention-days: 90
+          if-no-files-found: warn
+
+      - name: Upload crash artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: crashes-${{ matrix.target }}
+          path: qa/fuzz/artifacts/${{ matrix.target }}/
+          retention-days: 30
+          # Don't fail the workflow if there are no artifacts (rare race:
+          # libFuzzer aborted before writing the crash file).
+          if-no-files-found: warn
+
+  # The campaign above hunts logic bugs: ASan on, generous ceilings, five
+  # hours a target. It is structurally bad at two other bug classes.
+  #
+  # `cargo fuzz` already defaults `--build-std` on, so the campaign does get
+  # a standard library built with debug assertions and ASan. What it does
+  # not get is cargo-careful's extra instrumentation — const-UB detection
+  # and uninitialized-memory checks — which catch a different failure mode
+  # from the out-of-bounds and use-after-free ASan is looking for. The
+  # workspace does carry `unsafe`, so this is not hypothetical.
+  #
+  # The second blind spot is resources. ASan inflates RSS several-fold with
+  # its shadow mapping, so a genuine allocation blowup is indistinguishable
+  # from sanitizer overhead, and the campaign cannot police memory or time
+  # in any meaningful way.
+  #
+  # This sweep covers both, weekly, at a fraction of the budget:
+  #
+  #   careful     `--careful`: adds the const-UB and init checks on top of
+  #               the debug-assertion std the campaign already builds, ASan
+  #               still on.
+  #   exhaustion  Sanitizer off, tight RSS/malloc/time ceilings, longer
+  #               inputs. ASan is off *precisely so* the ceilings mean
+  #               something: without the shadow overhead, a gigabyte of RSS
+  #               is a gigabyte the target really allocated. `-max_len` is
+  #               raised because exhaustion scales with input size.
+  #
+  # TSan is deliberately absent: `qa/fuzz` never enables the `multicore`
+  # feature, so no target runs rayon and there is no race to find. MSan is
+  # absent because it reports false positives unless every dependency is
+  # instrumented, which the pinned curve and arithmetic crates are not.
+  hardening:
+    name: hardening ${{ matrix.flavor }} ${{ matrix.target }}
+    needs: source-lint
+    if: github.event.schedule == '0 0 * * 6' || (github.event_name == 'workflow_dispatch' && github.event.inputs.run_hardening == 'true')
+    runs-on: ubuntu-latest
+    # `careful` rebuilds the standard library from source, which dominates
+    # the job well past the fuzz budget itself. The exception is spelled out
+    # in the matrix: libFuzzer replays the whole restored corpus before it
+    # starts mutating and `-max_total_time` does not cut that replay short,
+    # and `fuzz_pcd_lifecycle` builds and verifies real proof trees at
+    # seconds per unit, so a few hundred units under a debug standard
+    # library already fill most of the default ceiling.
+    timeout-minutes: ${{ matrix.timeout || 120 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor:
+          - careful
+          - exhaustion
+        target:
+          - fuzz_element_ops
+          - fuzz_witness_coverage
+          - fuzz_witness_cheat
+          - fuzz_driver_metamorphic
+          - fuzz_algebraic_identities
+          - fuzz_element_assertions
+          - fuzz_multipack
+          - fuzz_point_identities
+          - fuzz_consistent
+          - fuzz_io_roundtrip
+          - fuzz_poseidon_sponge
+          - fuzz_poseidon_differential
+          - fuzz_endoscalar
+          - fuzz_revdot
+          - fuzz_fold_revdot
+          - fuzz_sxy_agreement
+          - fuzz_circuit_witness
+          - fuzz_circuit_revdot_identity
+          - fuzz_staging
+          - fuzz_verify_reject
+          - fuzz_verify_reject_full
+          - fuzz_pcd_lifecycle
+          - fuzz_witness_pinning
+          - fuzz_circuit_cheat
+          - fuzz_advice_patcher
+          - fuzz_internal_circuits
+          - fuzz_completeness
+          - fuzz_registry
+        include:
+          - target: fuzz_pcd_lifecycle
+            timeout: 240
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned nightly toolchain
+        id: nightly
+        uses: ./.github/actions/rust-nightly-setup
+        with:
+          # `--careful` implies `--build-std`, which compiles the standard
+          # library from source and therefore needs its sources present.
+          components: rust-src
+
+      # A cache family per flavor. `careful` and `exhaustion` produce
+      # incompatible artifacts (different sanitizer, different std build),
+      # and sharing a key with the campaign would evict the hot build it
+      # depends on every Sunday.
+      - name: Cache hardening build artifacts
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: qa/fuzz/target
+          key: ${{ runner.os }}-fuzz-hardening-${{ matrix.flavor }}-target-${{ hashFiles('qa/fuzz/Cargo.toml') }}-${{ hashFiles('qa/fuzz/fuzz_targets/**/*.rs') }}-${{ hashFiles('qa/fuzz/bin/**/*.rs') }}
+          restore-keys: |
+            ${{ runner.os }}-fuzz-hardening-${{ matrix.flavor }}-target-
+
+      # Read-only: this sweep starts from whatever the campaign has found so
+      # far, because a corpus that already reaches deep code is the fastest
+      # way to reach it again under a different sanitizer. It never saves,
+      # so the campaign's corpus lineage stays single-writer and a
+      # short hardening run can't dilute a five-hour campaign's cache entry.
+      - name: Restore fuzz corpus
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: qa/fuzz/corpus/${{ matrix.target }}
+          key: ${{ runner.os }}-fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-fuzz-corpus-${{ matrix.target }}-
+
+      - name: Install cargo-fuzz
+        # Keep this pin in sync with the campaign above and fuzz-coverage.yml.
+        run: cargo install --locked cargo-fuzz@0.13.1
+
+      - name: Run hardening flavor
+        working-directory: qa/fuzz
+        env:
+          DURATION: ${{ github.event.inputs.hardening_duration || '900' }}
+          RUSTUP_TOOLCHAIN: ${{ steps.nightly.outputs.toolchain }}
+          FUZZ_TARGET: ${{ matrix.target }}
+          FLAVOR: ${{ matrix.flavor }}
+        run: |
+          set -euo pipefail
+          case "$FLAVOR" in
+            careful)
+              # ASan stays on; `--careful` layers the const-UB and init
+              # checks over it. A debug std is slow, so the per-input
+              # timeout is generous — a hang here would be a real one.
+              BUILD_ARGS="--careful"
+              LIBFUZZER_ARGS="-max_len=1024 -rss_limit_mb=4096 -malloc_limit_mb=2048 -timeout=300"
+              ;;
+            exhaustion)
+              # No sanitizer, so RSS is the target's own. 1 GB / 512 MB /
+              # 30 s are well clear of what an honest input needs and well
+              # under what a runner can absorb, which is the window an
+              # exhaustion bug has to show itself in.
+              BUILD_ARGS="-s none"
+              LIBFUZZER_ARGS="-max_len=16384 -rss_limit_mb=1024 -malloc_limit_mb=512 -timeout=30"
+              ;;
+            *)
+              echo "::error::unknown flavor '${FLAVOR}'"
+              exit 1
+              ;;
+          esac
+          mkdir -p "corpus/${FUZZ_TARGET}"
+          CORPUS_DIRS="corpus/${FUZZ_TARGET}"
+          if [ -d "seeds/${FUZZ_TARGET}" ]; then
+            CORPUS_DIRS="${CORPUS_DIRS} seeds/${FUZZ_TARGET}"
+          fi
+          echo "::group::${FLAVOR} ${FUZZ_TARGET}: ${BUILD_ARGS} ${LIBFUZZER_ARGS}"
+          cargo fuzz run --fuzz-dir . $BUILD_ARGS "$FUZZ_TARGET" $CORPUS_DIRS -- \
+            $LIBFUZZER_ARGS \
+            -max_total_time="$DURATION" 2>&1 | tee "hardening-${FLAVOR}.log"
+          echo "::endgroup::"
+
+      - name: Summarize
+        if: always()
+        working-directory: qa/fuzz
+        env:
+          FUZZ_TARGET: ${{ matrix.target }}
+          FLAVOR: ${{ matrix.flavor }}
+        run: |
+          {
+            echo "## hardening ${FLAVOR} ${FUZZ_TARGET}"
+            echo '```'
+            tail -10 "hardening-${FLAVOR}.log" 2>/dev/null || echo "(no log: the build failed before libFuzzer started)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload crash artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          # Distinct from the campaign's `crashes-<target>`: a hardening
+          # reproducer only reproduces under its own flavor's build, so the
+          # flavor has to travel with the input.
+          name: crashes-hardening-${{ matrix.flavor }}-${{ matrix.target }}
+          path: |
+            qa/fuzz/artifacts/${{ matrix.target }}/
+            qa/fuzz/hardening-${{ matrix.flavor }}.log
+          retention-days: 30
+          if-no-files-found: warn

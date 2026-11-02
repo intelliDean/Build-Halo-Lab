@@ -1,0 +1,917 @@
+//! Proof corruption utilities for fuzz-testing the verifier.
+//!
+//! [`Corruption`] names one edit to a finished [`Proof`], and
+//! [`Proof::corrupt`] applies it and reports whether the verifier is obliged
+//! to notice. The vocabulary covers what
+//! [`verify`](crate::Application::verify) actually reads: the application
+//! metadata, every challenge and bridge commitment the unified instance
+//! carries, and an individual coefficient of any native or nested polynomial
+//! a revdot claim folds.
+//!
+//! # Why a corruption is not always a rejection
+//!
+//! Some requested edits make no change: a zero delta, an out-of-range
+//! coefficient index, or an assignment of the value already present. These
+//! return [`Binding::Unbound`]; a harness asserts rejection only for
+//! [`Binding::MustReject`]. Classification describes one edit to an otherwise
+//! valid proof. Composed edits can cancel, so their final effect must be
+//! considered separately.
+//!
+//! The classification is derived, not guessed:
+//!
+//! * **Instance edits** — challenges, bridge commitments, headers, the
+//!   circuit id, and anything that moves the derived $c = \operatorname{revdot}(A, B)$
+//!   or $v = p(u)$ — change $k(y)$, which the verifier evaluates by Horner at
+//!   a $y$ it samples fresh. The polynomials the claims fold do not move with
+//!   it, so the claim breaks unless the fresh $y$ is a root of the difference:
+//!   a Schwartz–Zippel event of probability under $4n/|\mathbb{F}|$. A
+//!   challenge or bridge commitment is caught earlier still: the verifier
+//!   rederives every challenge from the transcript over the bridge
+//!   commitments.
+//! * **A polynomial coefficient or cached commitment** — native or nested,
+//!   the walked $P$ and $P_n$ included — is bound by the verifier's
+//!   commitment checks. Every effective coefficient edit leaves its cache
+//!   unchanged. Adding $\delta X^i$ changes the commitment by $\delta G_i$,
+//!   even outside the circuit claim's $t_z$ region or when the derived $c$
+//!   or $v$ stays unchanged. The verifier recomputes commitments from their
+//!   polynomials and compares them in one batch per curve under a fresh
+//!   scalar, so the mismatch is caught unless that scalar is a root of the
+//!   difference. Blinding freedom does not permit changing a polynomial
+//!   while retaining its old commitment.
+//! * **A rescaled accumulator** — $a \mapsto s\,a$, $b \mapsto s^{-1} b$,
+//!   caches updated to match — preserves the derived $c$ and every
+//!   commitment check, and is caught by what the verifier reads off the
+//!   stages instead: the eval stage claims $a(u)$ and $b(u)$, which the
+//!   verifier recomputes from the polynomials, and on the native side the
+//!   `ab` bridge stage the verifier rederives holds the old commitments.
+//! * **The `registry_xy` polynomials** are also compared against
+//!   $m(w, x, y)$ and $m_n(w, x_n, y_n)$ at a $w$ the verifier samples fresh.
+//! * **A nested challenge stage coefficient** is caught at any index: the
+//!   verifier recomputes the stage from the proof's challenges.
+//! * **The exported challenge binding** — the challenge stage's commitment
+//!   without its $\beta$ term, a point of the unified instance — is caught
+//!   as any instance edit is: the last `bind_challenges` circuit recomputes
+//!   it from the transcript challenges.
+//!
+//! `bridge_alpha` has no dedicated corruption variant yet, although the
+//! verifier uses it to reconstruct and check the cached `ab` bridge
+//! polynomial. Native and nested commitment caches are covered by
+//! [`Corruption::NegateNativeCommitment`] and
+//! [`Corruption::NegateNestedCommitment`]; the bridge commitments have
+//! [`Corruption::NegateBridgeCommitment`].
+//!
+//! The `registry_wx0`, `registry_wx1` and `registry_wy` polynomials are not
+//! stored in a [`Proof`]. The verifier checks their claimed evaluations
+//! against the registry by reading the query and eval stage polynomials.
+//! Those stored stages, rather than the ephemeral restriction polynomials,
+//! are the corresponding corruption targets.
+
+use alloc::vec;
+
+use ragu_circuits::{
+    polynomials::{Rank, sparse},
+    registry::CircuitIndex,
+};
+use ragu_core::Cycle;
+use udon::field::Field;
+
+use crate::{Application, Proof};
+
+// The corruption vocabulary names proof components, and the names it uses are
+// the ones `internal` uses. Those enums are *not* re-exported here, and the
+// duplication below is deliberate.
+//
+// `internal` is a private module. Re-exporting its enums would make them
+// public API of the crate whenever this feature is on, which drags
+// `#![deny(missing_docs)]` onto production files and, more to the point,
+// means a fuzzing feature decides what the crate publishes. Mirroring keeps
+// every fuzzing-driven change inside this module.
+//
+// Drift is a compile error, not a silent gap: the mappings in
+// `crate::proof::fuzz` match these exhaustively, so a variant added to
+// `internal` without a counterpart here fails to build.
+
+/// Identifies which of the two child proofs a component came from.
+///
+/// Mirrors `internal::Side`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    /// The left child.
+    Left,
+    /// The right child.
+    Right,
+}
+
+/// A native-field polynomial component of a proof.
+///
+/// Mirrors `internal::native::RxComponent`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RxComponent {
+    /// The `a` polynomial from the AB proof (revdot claim).
+    AbA,
+    /// The `b` polynomial from the AB proof (revdot claim).
+    AbB,
+    /// An rx polynomial component indexed by [`NativeRx`].
+    Rx(NativeRx),
+}
+
+/// Which native-field rx polynomial of a proof to address.
+///
+/// Mirrors `internal::native::RxIndex`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeRx {
+    /// The application circuit's rx polynomial.
+    Application,
+    /// The `hashes_1` circuit's rx polynomial.
+    Hashes1,
+    /// The `hashes_2` circuit's rx polynomial.
+    Hashes2,
+    /// The `inner_collapse` circuit's rx polynomial.
+    InnerCollapse,
+    /// The `outer_collapse` circuit's rx polynomial.
+    OuterCollapse,
+    /// The `compute_v` circuit's rx polynomial.
+    ComputeV,
+    /// A `bind_challenges` circuit's rx polynomial.
+    BindChallenges(u32),
+    /// The `bind_beta` circuit's rx polynomial.
+    BindBeta,
+    /// The `bind_endoscalar` circuit's rx polynomial.
+    BindEndoscalar,
+    /// A native endoscaling step's rx polynomial.
+    EndoscalingStep(u32),
+    /// The `preamble` stage's rx polynomial.
+    Preamble,
+    /// The `inner_error` stage's rx polynomial.
+    InnerError,
+    /// The `outer_error` stage's rx polynomial.
+    OuterError,
+    /// The `query` stage's rx polynomial.
+    Query,
+    /// The `eval` stage's rx polynomial.
+    Eval,
+    /// The native points binding stage's rx polynomial.
+    PointsBinding,
+    /// The native points children stage's rx polynomial.
+    PointsChildren,
+    /// The native `registry_wx` points stage's rx polynomial.
+    PointsRegistryWx,
+    /// The native `ab` points stage's rx polynomial.
+    PointsAb,
+    /// The native `f` points stage's rx polynomial.
+    PointsF,
+    /// The native walk stage's rx polynomial.
+    PointsWalk,
+}
+
+impl NativeRx {
+    /// The number of native rx polynomial components.
+    pub const NUM: usize = crate::internal::native::RxIndex::NUM;
+
+    /// All variants, in the canonical order `internal` defines.
+    ///
+    /// Derived from `internal::native::RxIndex::ALL` rather than restated.
+    /// That order is not cosmetic — it drives the `Write` impl for `RxValues`
+    /// and the evaluation order in `poly_queries` — and a hand-copied list
+    /// could drift from it silently, which an exhaustive `match` would not
+    /// catch.
+    pub const ALL: [Self; Self::NUM] = Self::derive_all();
+
+    const fn derive_all() -> [Self; Self::NUM] {
+        let src = crate::internal::native::RxIndex::ALL;
+        let mut out = [Self::Application; Self::NUM];
+        let mut i = 0;
+        while i < Self::NUM {
+            out[i] = Self::from_internal(src[i]);
+            i += 1;
+        }
+        out
+    }
+
+    const fn from_internal(v: crate::internal::native::RxIndex) -> Self {
+        use crate::internal::native::RxIndex as I;
+        match v {
+            I::Application => Self::Application,
+            I::Hashes1 => Self::Hashes1,
+            I::Hashes2 => Self::Hashes2,
+            I::InnerCollapse => Self::InnerCollapse,
+            I::OuterCollapse => Self::OuterCollapse,
+            I::ComputeV => Self::ComputeV,
+            I::BindChallenges(k) => Self::BindChallenges(k),
+            I::BindBeta => Self::BindBeta,
+            I::BindEndoscalar => Self::BindEndoscalar,
+            I::EndoscalingStep(step) => Self::EndoscalingStep(step),
+            I::Preamble => Self::Preamble,
+            I::InnerError => Self::InnerError,
+            I::OuterError => Self::OuterError,
+            I::Query => Self::Query,
+            I::Eval => Self::Eval,
+            I::PointsBinding => Self::PointsBinding,
+            I::PointsChildren => Self::PointsChildren,
+            I::PointsRegistryWx => Self::PointsRegistryWx,
+            I::PointsAb => Self::PointsAb,
+            I::PointsF => Self::PointsF,
+            I::PointsWalk => Self::PointsWalk,
+        }
+    }
+}
+
+/// Which nested-field rx polynomial of a proof to address.
+///
+/// Mirrors `internal::nested::RxIndex`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NestedRx {
+    /// EndoscalingStep circuit rx polynomial (indexed by step number).
+    EndoscalingStep(u32),
+    /// Export circuit rx polynomial.
+    Export,
+    /// Collapse circuit rx polynomial.
+    Collapse,
+    /// Compute-v circuit rx polynomial.
+    ComputeV,
+    /// EndoscalarStage rx polynomial.
+    EndoscalarStage,
+    /// PointsStage rx polynomial.
+    PointsStage,
+    /// Bridge `preamble` rx polynomial.
+    BridgePreamble,
+    /// Bridge `s_prime` rx polynomial.
+    BridgeSPrime,
+    /// Bridge `inner_error` rx polynomial.
+    BridgeInnerError,
+    /// Bridge `outer_error` rx polynomial.
+    BridgeOuterError,
+    /// Bridge `ab` rx polynomial.
+    BridgeAB,
+    /// Bridge `query` rx polynomial.
+    BridgeQuery,
+    /// Bridge `f` rx polynomial.
+    BridgeF,
+    /// Bridge `eval` rx polynomial.
+    BridgeEval,
+    /// Nested challenge stage rx polynomial.
+    ChallengeStage,
+}
+
+/// One of the two nested accumulator polynomials.
+///
+/// Mirrors the `AbA` / `AbB` variants of `internal::nested::RxComponent`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NestedAccumulator {
+    /// The `a` polynomial of the nested accumulator.
+    A,
+    /// The `b` polynomial of the nested accumulator.
+    B,
+}
+
+impl NestedAccumulator {
+    /// Both polynomials.
+    pub const ALL: [Self; 2] = [Self::A, Self::B];
+}
+
+/// Whether [`verify`](crate::Application::verify) is obliged to reject a
+/// corrupted proof.
+///
+/// See the [module documentation](self) for how each [`Corruption`] is
+/// classified.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Binding {
+    /// The corruption moved a value some verifier check binds, so `verify`
+    /// must not accept — except with negligible probability over the
+    /// randomness the verifier samples for itself.
+    MustReject,
+    /// The edit made no change, such as a zero delta or an out-of-range
+    /// coefficient index. It creates no obligation to reject.
+    Unbound,
+}
+
+/// One of the eleven verifier challenges the unified instance carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Challenge {
+    /// The `w` challenge.
+    W,
+    /// The `y` challenge, which also feeds the `registry_xy` check.
+    Y,
+    /// The `z` challenge.
+    Z,
+    /// The `mu` challenge.
+    Mu,
+    /// The `nu` challenge.
+    Nu,
+    /// The `mu'` challenge.
+    MuPrime,
+    /// The `nu'` challenge.
+    NuPrime,
+    /// The `x` challenge, which also feeds the `registry_xy` check.
+    X,
+    /// The `alpha` challenge.
+    Alpha,
+    /// The `u` challenge, at which `p` is opened.
+    U,
+    /// The `pre_beta` challenge.
+    PreBeta,
+}
+
+impl Challenge {
+    /// All variants, in the order the unified instance writes them.
+    pub const ALL: [Self; 11] = [
+        Self::W,
+        Self::Y,
+        Self::Z,
+        Self::Mu,
+        Self::Nu,
+        Self::MuPrime,
+        Self::NuPrime,
+        Self::X,
+        Self::Alpha,
+        Self::U,
+        Self::PreBeta,
+    ];
+}
+
+/// Which cached native commitment of a proof to address: one of its native
+/// rx polynomials', or the $a$, $b$, `registry_xy` or walked $P$ commitment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeCommitment {
+    /// A native rx polynomial's commitment.
+    Rx(NativeRx),
+    /// The native `a` commitment.
+    AbA,
+    /// The native `b` commitment.
+    AbB,
+    /// The native `registry_xy` commitment.
+    RegistryXy,
+    /// The walked $P$.
+    P,
+}
+
+impl NativeCommitment {
+    /// The number of cached native commitments.
+    pub const NUM: usize = NativeRx::NUM + 4;
+
+    /// All variants, the rx commitments in [`NativeRx::ALL`] order.
+    pub const ALL: [Self; Self::NUM] = {
+        let mut out = [Self::AbA; Self::NUM];
+        let mut i = 0;
+        while i < NativeRx::NUM {
+            out[i] = Self::Rx(NativeRx::ALL[i]);
+            i += 1;
+        }
+        out[i] = Self::AbA;
+        out[i + 1] = Self::AbB;
+        out[i + 2] = Self::RegistryXy;
+        out[i + 3] = Self::P;
+        out
+    };
+}
+
+/// Which cached nested commitment of a proof to address: one of its nested
+/// rx polynomials' other than the bridges' (see [`BridgeCommitment`]), or
+/// the $a_n$, $b_n$, nested `registry_xy` or walked $P_n$ commitment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NestedCommitment {
+    /// A nested rx polynomial's commitment.
+    Rx(NestedRx),
+    /// The nested `a` commitment.
+    AbA,
+    /// The nested `b` commitment.
+    AbB,
+    /// The nested `registry_xy` commitment.
+    RegistryXy,
+    /// The walked $P_n$.
+    P,
+}
+
+impl NestedCommitment {
+    /// The number of cached nested commitments this addresses.
+    pub const NUM: usize = NestedRx::NUM - BridgeCommitment::ALL.len() + 4;
+
+    /// All variants, the rx commitments in [`NestedRx::ALL`] order with the
+    /// bridges skipped.
+    pub const ALL: [Self; Self::NUM] = {
+        let mut out = [Self::AbA; Self::NUM];
+        let mut i = 0;
+        let mut j = 0;
+        while j < NestedRx::NUM {
+            if !NestedRx::ALL[j].is_bridge() {
+                out[i] = Self::Rx(NestedRx::ALL[j]);
+                i += 1;
+            }
+            j += 1;
+        }
+        out[i] = Self::AbA;
+        out[i + 1] = Self::AbB;
+        out[i + 2] = Self::RegistryXy;
+        out[i + 3] = Self::P;
+        assert!(i + 4 == Self::NUM);
+        out
+    };
+}
+
+/// One of the eight nested-curve commitments the unified instance carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BridgeCommitment {
+    /// The bridge `preamble` commitment.
+    Preamble,
+    /// The bridge `s'` commitment.
+    SPrime,
+    /// The bridge `inner_error` commitment.
+    InnerError,
+    /// The bridge `outer_error` commitment.
+    OuterError,
+    /// The bridge `ab` commitment.
+    AB,
+    /// The bridge `query` commitment.
+    Query,
+    /// The bridge `f` commitment.
+    F,
+    /// The bridge `eval` commitment.
+    Eval,
+}
+
+impl BridgeCommitment {
+    /// All variants, in the order the unified instance writes them.
+    pub const ALL: [Self; 8] = [
+        Self::Preamble,
+        Self::SPrime,
+        Self::InnerError,
+        Self::OuterError,
+        Self::AB,
+        Self::Query,
+        Self::F,
+        Self::Eval,
+    ];
+}
+
+/// Targeted corruption of a single proof component.
+///
+/// Apply one with [`Proof::corrupt`]. Its [`Binding`] describes that edit in
+/// isolation; a harness composing edits must account for cancellations.
+pub enum Corruption<C: Cycle> {
+    /// Set `circuit_id` to the given index. Out-of-domain indices are
+    /// rejected outright; in-domain ones move `omega_j` in the instance and
+    /// select a different wiring polynomial.
+    CircuitId(u32),
+    /// Add `delta` to one element of a child header.
+    HeaderElement {
+        /// Which child header to edit.
+        side: Side,
+        /// The element's position; out of range is a no-op.
+        index: usize,
+        /// What to add.
+        delta: C::CircuitField,
+    },
+    /// Resize a child header to the given length, which the verifier checks
+    /// against `HEADER_SIZE`.
+    HeaderLen {
+        /// Which child header to resize.
+        side: Side,
+        /// The new length.
+        len: usize,
+    },
+    /// Exchange the left and right child headers, which reorders both
+    /// `application_ky` and `unified_bridge_ky`.
+    SwapHeaders,
+    /// Overwrite a verifier challenge.
+    Challenge(Challenge, C::CircuitField),
+    /// Negate a bridge commitment, moving its $y$ coordinate in the instance.
+    NegateBridgeCommitment(BridgeCommitment),
+    /// Negate the exported challenge binding, moving its $y$ coordinate in
+    /// the instance.
+    NegateChallengesPartial,
+    /// Negate a cached native commitment, which the verifier recomputes.
+    NegateNativeCommitment(NativeCommitment),
+    /// Negate a cached nested commitment, which the verifier recomputes.
+    NegateNestedCommitment(NestedCommitment),
+    /// Scale the native accumulator's `a` by the given factor and `b` by
+    /// its inverse, caches included, which preserves $c$.
+    RescaleNativeAccumulator(C::CircuitField),
+    /// Scale the nested accumulator's `a` by the given factor and `b` by
+    /// its inverse, caches included, which preserves $c_n$.
+    RescaleNestedAccumulator(C::ScalarField),
+    /// Add `delta` to one coefficient of a native rx polynomial, or of the
+    /// `a` / `b` polynomials of the raw revdot claim.
+    NativeCoeff {
+        /// Which polynomial.
+        component: RxComponent,
+        /// The coefficient's index; out of range is a no-op.
+        coeff: usize,
+        /// What to add.
+        delta: C::CircuitField,
+    },
+    /// Add `delta` to one coefficient of the `registry_xy` polynomial.
+    RegistryXyCoeff {
+        /// The coefficient's index; out of range is a no-op.
+        coeff: usize,
+        /// What to add.
+        delta: C::CircuitField,
+    },
+    /// Add `delta` to one coefficient of the `p` polynomial.
+    PCoeff {
+        /// The coefficient's index; out of range is a no-op.
+        coeff: usize,
+        /// What to add.
+        delta: C::CircuitField,
+    },
+    /// Add `delta` to one coefficient of a nested rx polynomial.
+    NestedCoeff {
+        /// Which polynomial.
+        index: NestedRx,
+        /// The coefficient's index; out of range is a no-op.
+        coeff: usize,
+        /// What to add.
+        delta: C::ScalarField,
+    },
+    /// Add `delta` to one coefficient of a nested accumulator polynomial.
+    NestedAccumulatorCoeff {
+        /// Which polynomial.
+        which: NestedAccumulator,
+        /// The coefficient's index; out of range is a no-op.
+        coeff: usize,
+        /// What to add.
+        delta: C::ScalarField,
+    },
+    /// Add `delta` to one coefficient of the nested `registry_xy` polynomial.
+    NestedRegistryXyCoeff {
+        /// The coefficient's index; out of range is a no-op.
+        coeff: usize,
+        /// What to add.
+        delta: C::ScalarField,
+    },
+    /// Add `delta` to one coefficient of the nested `p` polynomial.
+    NestedPCoeff {
+        /// The coefficient's index; out of range is a no-op.
+        coeff: usize,
+        /// What to add.
+        delta: C::ScalarField,
+    },
+}
+
+impl<C: Cycle> core::fmt::Debug for Corruption<C> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Corruption::CircuitId(id) => write!(f, "CircuitId({id})"),
+            Corruption::HeaderElement { side, index, .. } => {
+                write!(f, "HeaderElement {{ side: {side:?}, index: {index} }}")
+            }
+            Corruption::HeaderLen { side, len } => {
+                write!(f, "HeaderLen {{ side: {side:?}, len: {len} }}")
+            }
+            Corruption::SwapHeaders => write!(f, "SwapHeaders"),
+            Corruption::Challenge(which, _) => write!(f, "Challenge({which:?})"),
+            Corruption::NegateBridgeCommitment(which) => {
+                write!(f, "NegateBridgeCommitment({which:?})")
+            }
+            Corruption::NegateChallengesPartial => write!(f, "NegateChallengesPartial"),
+            Corruption::NegateNativeCommitment(which) => {
+                write!(f, "NegateNativeCommitment({which:?})")
+            }
+            Corruption::NegateNestedCommitment(which) => {
+                write!(f, "NegateNestedCommitment({which:?})")
+            }
+            Corruption::RescaleNativeAccumulator(_) => write!(f, "RescaleNativeAccumulator"),
+            Corruption::RescaleNestedAccumulator(_) => write!(f, "RescaleNestedAccumulator"),
+            Corruption::NativeCoeff {
+                component, coeff, ..
+            } => write!(
+                f,
+                "NativeCoeff {{ component: {component:?}, coeff: {coeff} }}"
+            ),
+            Corruption::RegistryXyCoeff { coeff, .. } => {
+                write!(f, "RegistryXyCoeff {{ coeff: {coeff} }}")
+            }
+            Corruption::PCoeff { coeff, .. } => write!(f, "PCoeff {{ coeff: {coeff} }}"),
+            Corruption::NestedCoeff { index, coeff, .. } => {
+                write!(f, "NestedCoeff {{ index: {index:?}, coeff: {coeff} }}")
+            }
+            Corruption::NestedAccumulatorCoeff { which, coeff, .. } => {
+                write!(
+                    f,
+                    "NestedAccumulatorCoeff {{ which: {which:?}, coeff: {coeff} }}"
+                )
+            }
+            Corruption::NestedRegistryXyCoeff { coeff, .. } => {
+                write!(f, "NestedRegistryXyCoeff {{ coeff: {coeff} }}")
+            }
+            Corruption::NestedPCoeff { coeff, .. } => {
+                write!(f, "NestedPCoeff {{ coeff: {coeff} }}")
+            }
+        }
+    }
+}
+
+/// A polynomial that is `delta` at `coeff` and zero elsewhere, or `None` when
+/// the edit would be a no-op — a zero delta, or an index past the rank's
+/// capacity.
+fn monomial<F: Field, R: Rank>(coeff: usize, delta: F) -> Option<sparse::Polynomial<F, R>> {
+    if delta == F::ZERO || coeff >= R::num_coeffs() {
+        return None;
+    }
+    let mut coeffs = vec![F::ZERO; coeff + 1];
+    coeffs[coeff] = delta;
+    Some(sparse::Polynomial::from_coeffs(coeffs))
+}
+
+impl<C: Cycle, R: Rank> Proof<C, R> {
+    /// Apply a [`Corruption`] to this proof, reporting whether
+    /// [`verify`](crate::Application::verify) is obliged to reject afterwards.
+    #[doc(hidden)]
+    pub fn corrupt(&mut self, corruption: Corruption<C>) -> Binding {
+        match corruption {
+            Corruption::CircuitId(id) => {
+                let id = CircuitIndex::from_u32(id);
+                if self.circuit_id == id {
+                    return Binding::Unbound;
+                }
+                self.circuit_id = id;
+                Binding::MustReject
+            }
+
+            Corruption::HeaderElement { side, index, delta } => {
+                let header = match side {
+                    Side::Left => &mut self.left_header,
+                    Side::Right => &mut self.right_header,
+                };
+                match header.get_mut(index) {
+                    Some(element) if delta != C::CircuitField::ZERO => {
+                        *element += delta;
+                        Binding::MustReject
+                    }
+                    _ => Binding::Unbound,
+                }
+            }
+
+            Corruption::HeaderLen { side, len } => {
+                let header = match side {
+                    Side::Left => &mut self.left_header,
+                    Side::Right => &mut self.right_header,
+                };
+                if header.len() == len {
+                    return Binding::Unbound;
+                }
+                header.resize(len, C::CircuitField::ZERO);
+                Binding::MustReject
+            }
+
+            Corruption::SwapHeaders => {
+                if self.left_header == self.right_header {
+                    return Binding::Unbound;
+                }
+                core::mem::swap(&mut self.left_header, &mut self.right_header);
+                Binding::MustReject
+            }
+
+            Corruption::Challenge(which, value) => {
+                let slot = match which {
+                    Challenge::W => &mut self.w,
+                    Challenge::Y => &mut self.y,
+                    Challenge::Z => &mut self.z,
+                    Challenge::Mu => &mut self.mu,
+                    Challenge::Nu => &mut self.nu,
+                    Challenge::MuPrime => &mut self.mu_prime,
+                    Challenge::NuPrime => &mut self.nu_prime,
+                    Challenge::X => &mut self.x,
+                    Challenge::Alpha => &mut self.alpha,
+                    Challenge::U => &mut self.u,
+                    Challenge::PreBeta => &mut self.pre_beta,
+                };
+                if *slot == value {
+                    return Binding::Unbound;
+                }
+                *slot = value;
+                Binding::MustReject
+            }
+
+            Corruption::NegateBridgeCommitment(which) => {
+                let point = self.bridge_commitment_mut(which);
+                let negated = -*point;
+                if negated == *point {
+                    // The identity, and points of order two, negate to
+                    // themselves; the instance would not move.
+                    return Binding::Unbound;
+                }
+                *point = negated;
+                Binding::MustReject
+            }
+
+            Corruption::NegateChallengesPartial => {
+                let point = self.nested_challenges_partial_mut();
+                let negated = -*point;
+                if negated == *point {
+                    return Binding::Unbound;
+                }
+                *point = negated;
+                Binding::MustReject
+            }
+
+            Corruption::NegateNativeCommitment(which) => {
+                let point = self.native_commitment_cache_mut(which);
+                let negated = -*point;
+                if negated == *point {
+                    return Binding::Unbound;
+                }
+                *point = negated;
+                Binding::MustReject
+            }
+
+            Corruption::NegateNestedCommitment(which) => {
+                let point = self.nested_commitment_cache_mut(which);
+                let negated = -*point;
+                if negated == *point {
+                    return Binding::Unbound;
+                }
+                *point = negated;
+                Binding::MustReject
+            }
+
+            Corruption::RescaleNativeAccumulator(scale) => {
+                let Some(inverse) = scale.invert() else {
+                    return Binding::Unbound;
+                };
+                if scale == C::CircuitField::ONE {
+                    return Binding::Unbound;
+                }
+                self.native_component_mut(RxComponent::AbA).scale(scale);
+                self.native_component_mut(RxComponent::AbB).scale(inverse);
+                let a = self.native_commitment_cache_mut(NativeCommitment::AbA);
+                *a = (*a * scale).into();
+                let b = self.native_commitment_cache_mut(NativeCommitment::AbB);
+                *b = (*b * inverse).into();
+                Binding::MustReject
+            }
+
+            Corruption::RescaleNestedAccumulator(scale) => {
+                let Some(inverse) = scale.invert() else {
+                    return Binding::Unbound;
+                };
+                if scale == C::ScalarField::ONE {
+                    return Binding::Unbound;
+                }
+                self.nested_accumulator_mut(NestedAccumulator::A)
+                    .scale(scale);
+                self.nested_accumulator_mut(NestedAccumulator::B)
+                    .scale(inverse);
+                let a = self.nested_commitment_cache_mut(NestedCommitment::AbA);
+                *a = (*a * scale).into();
+                let b = self.nested_commitment_cache_mut(NestedCommitment::AbB);
+                *b = (*b * inverse).into();
+                Binding::MustReject
+            }
+
+            Corruption::NativeCoeff {
+                component,
+                coeff,
+                delta,
+            } => {
+                let Some(delta) = monomial::<_, R>(coeff, delta) else {
+                    return Binding::Unbound;
+                };
+                self.native_component_mut(component).add_assign(&delta);
+                Binding::MustReject
+            }
+
+            Corruption::RegistryXyCoeff { coeff, delta } => {
+                let Some(delta) = monomial::<_, R>(coeff, delta) else {
+                    return Binding::Unbound;
+                };
+                self.native_registry_xy_poly_mut().add_assign(&delta);
+                Binding::MustReject
+            }
+
+            Corruption::PCoeff { coeff, delta } => {
+                let Some(delta) = monomial::<_, R>(coeff, delta) else {
+                    return Binding::Unbound;
+                };
+                self.native_p_poly_mut().add_assign(&delta);
+                Binding::MustReject
+            }
+
+            Corruption::NestedCoeff {
+                index,
+                coeff,
+                delta,
+            } => {
+                let Some(delta) = monomial::<_, R>(coeff, delta) else {
+                    return Binding::Unbound;
+                };
+                self.nested_rx_mut(index).add_assign(&delta);
+                Binding::MustReject
+            }
+
+            Corruption::NestedAccumulatorCoeff {
+                which,
+                coeff,
+                delta,
+            } => {
+                let Some(delta) = monomial::<_, R>(coeff, delta) else {
+                    return Binding::Unbound;
+                };
+                self.nested_accumulator_mut(which).add_assign(&delta);
+                Binding::MustReject
+            }
+
+            Corruption::NestedRegistryXyCoeff { coeff, delta } => {
+                let Some(delta) = monomial::<_, R>(coeff, delta) else {
+                    return Binding::Unbound;
+                };
+                self.nested_registry_xy_poly_mut().add_assign(&delta);
+                Binding::MustReject
+            }
+
+            Corruption::NestedPCoeff { coeff, delta } => {
+                let Some(delta) = monomial::<_, R>(coeff, delta) else {
+                    return Binding::Unbound;
+                };
+                self.nested_p_poly_mut().add_assign(&delta);
+                Binding::MustReject
+            }
+        }
+    }
+
+    /// The number of coefficients a polynomial of this proof's rank carries,
+    /// so a harness can bound the coefficient indices it chooses.
+    #[doc(hidden)]
+    pub fn num_coeffs() -> usize {
+        R::num_coeffs()
+    }
+
+    /// The number of coefficients at the low end that a circuit claim's
+    /// $t\_z$ term reaches, for harnesses that bias sampling toward this region.
+    /// Cached commitments bind every coefficient, so this is not a boundary
+    /// between [`Binding::MustReject`] and [`Binding::Unbound`] edits.
+    #[doc(hidden)]
+    pub fn num_bound_coeffs() -> usize {
+        R::n()
+    }
+}
+
+impl<C: Cycle, R: Rank, const HEADER_SIZE: usize, B: crate::SelectableBackend>
+    Application<'_, C, R, HEADER_SIZE, B>
+{
+    /// Create the synthesized dummy proof used to bootstrap recursion.
+    #[doc(hidden)]
+    pub fn test_dummy_proof(&self) -> Proof<C, R> {
+        self.dummy_proof()
+    }
+}
+
+impl NestedRx {
+    /// The number of nested rx components.
+    pub const NUM: usize = crate::internal::nested::RxIndex::NUM;
+
+    /// Whether this is a bridge stage's rx, whose commitment
+    /// [`BridgeCommitment`] addresses.
+    pub const fn is_bridge(self) -> bool {
+        matches!(
+            self,
+            Self::BridgePreamble
+                | Self::BridgeSPrime
+                | Self::BridgeInnerError
+                | Self::BridgeOuterError
+                | Self::BridgeAB
+                | Self::BridgeQuery
+                | Self::BridgeF
+                | Self::BridgeEval
+        )
+    }
+
+    /// All variants, in the canonical order `internal` defines.
+    ///
+    /// Derived from `internal::nested::RxIndex::ALL` for the same reason as
+    /// [`NativeRx::ALL`], and more urgently: this order is pinned by
+    /// `test_nested_registry_tag`, so restating it by hand would put a
+    /// consensus-relevant ordering in two places.
+    pub const ALL: [Self; Self::NUM] = Self::derive_all();
+
+    const fn derive_all() -> [Self; Self::NUM] {
+        let src = crate::internal::nested::RxIndex::ALL;
+        let mut out = [Self::EndoscalarStage; Self::NUM];
+        let mut i = 0;
+        while i < Self::NUM {
+            out[i] = Self::from_internal(src[i]);
+            i += 1;
+        }
+        out
+    }
+
+    const fn from_internal(v: crate::internal::nested::RxIndex) -> Self {
+        use crate::internal::nested::RxIndex as I;
+        match v {
+            I::EndoscalingStep(n) => Self::EndoscalingStep(n),
+            I::Export => Self::Export,
+            I::Collapse => Self::Collapse,
+            I::ComputeV => Self::ComputeV,
+            I::EndoscalarStage => Self::EndoscalarStage,
+            I::PointsStage => Self::PointsStage,
+            I::BridgePreamble => Self::BridgePreamble,
+            I::BridgeSPrime => Self::BridgeSPrime,
+            I::BridgeInnerError => Self::BridgeInnerError,
+            I::BridgeOuterError => Self::BridgeOuterError,
+            I::BridgeAB => Self::BridgeAB,
+            I::BridgeQuery => Self::BridgeQuery,
+            I::BridgeF => Self::BridgeF,
+            I::BridgeEval => Self::BridgeEval,
+            I::ChallengeStage => Self::ChallengeStage,
+        }
+    }
+}

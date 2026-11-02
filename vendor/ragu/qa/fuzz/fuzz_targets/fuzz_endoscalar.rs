@@ -1,0 +1,260 @@
+//! Fuzz endoscalar extract, lift, group_scale, and point operations.
+//!
+//! Invariants:
+//! - `extract_endoscalar` fails only with the typed `EndoscalarRangeError`
+//!   source; such inputs model transcript rejection and are discarded.
+//! - `lift_endoscalar(extract_endoscalar(r))` is deterministic.
+//! - In-circuit lift agrees with native `lift_endoscalar`.
+//! - `group_scale(p)` agrees with `p * lift_endoscalar::<Fq>(endo)`.
+//! - Point endo/negate/conditional ops agree with native curve arithmetic.
+//! - Edge scalars exercise both accepted and rejected challenge paths.
+
+#![no_main]
+
+use std::sync::LazyLock;
+
+use arbitrary::Arbitrary;
+use libfuzzer_sys::fuzz_target;
+use ragu_core::{
+    maybe::Maybe,
+    pasta::{EpAffine, Fp, Fq},
+};
+use ragu_primitives::{
+    Boolean, Element, Endoscalar, EndoscalarChallenge, EndoscalarRangeError, NonzeroBank, Point,
+    Simulator, allocator::Standard, extract_endoscalar, lift_endoscalar,
+};
+use udon::{
+    curve::{Affine, Projective},
+    field::Field,
+};
+
+/// Edge-case field elements that trigger boundary conditions.
+fn special_scalar(idx: u8) -> Fp {
+    match idx % 10 {
+        0 => Fp::ZERO,
+        1 => Fp::ONE,
+        2 => -Fp::ONE,          // p - 1
+        3 => Fp::TWO_INVERSE,   // (p + 1) / 2
+        4 => Fp::ROOT_OF_UNITY, // 2-adic root of unity
+        5 => Fp::MULTIPLICATIVE_GENERATOR,
+        6 => Fp::ZETA, // cube root of unity (endomorphism scalar)
+        7 => -Fp::ZETA,
+        8 => Fp::ROOT_OF_UNITY.square(),
+        _ => Fp::from(u64::MAX),
+    }
+}
+
+/// Precomputed table of non-identity Pallas points.
+///
+/// The native scalar mul `EpAffine::generator() * Fq::from(seed)` runs
+/// twice per input (for `p` and `p2`), ~50µs each. Endo/group_scale
+/// gadget paths are point-shape independent — they exercise the same
+/// window pattern for any on-curve point — so collapsing the u64 seed
+/// space onto a 64-point table doesn't lose meaningful coverage. The
+/// dominant native cost on this target is the third scalar mul
+/// `(p * expected_scalar).to_affine()` over a 256-bit Fq, which we
+/// cannot precompute (depends on the fuzzer-chosen scalar).
+const POINT_TABLE_LEN: usize = 64;
+static POINT_TABLE: LazyLock<[EpAffine; POINT_TABLE_LEN]> = LazyLock::new(|| {
+    let mut points = [EpAffine::generator(); POINT_TABLE_LEN];
+    for (i, p) in points.iter_mut().enumerate() {
+        if i > 0 {
+            *p = (EpAffine::generator() * Fq::from(i as u64)).to_affine();
+        }
+    }
+    points
+});
+
+/// Get a non-trivial curve point from a fuzzer-supplied seed.
+fn point_from_seed(seed: u64) -> EpAffine {
+    POINT_TABLE[(seed as usize) % POINT_TABLE_LEN]
+}
+
+#[derive(Arbitrary, Debug, Clone, Copy)]
+enum PointOp {
+    Endo,
+    Negate,
+    Double,
+    ConditionalEndo(bool),
+    ConditionalNegate(bool),
+}
+
+#[derive(Arbitrary, Debug)]
+struct Input {
+    /// Raw scalar seed for extract_endoscalar.
+    scalar_seed: u64,
+    /// If set, use a special edge-case scalar instead.
+    use_special: Option<u8>,
+    /// Seed for the curve point.
+    point_seed: u64,
+    /// Second point seed for add_incomplete.
+    point_seed2: u64,
+    /// Point operations to apply after group_scale.
+    point_ops: Vec<PointOp>,
+}
+
+fuzz_target!(|input: Input| {
+    // DEBUG_INPUT=1 prints the parsed Arbitrary input and exits — useful for
+    // triaging crash artifacts. See README.md "DEBUG_INPUT env var" section.
+    if std::env::var("DEBUG_INPUT").is_ok() {
+        eprintln!("{:#?}", input);
+        return;
+    }
+    if input.point_ops.len() > 16 {
+        return;
+    }
+
+    // Choose the scalar: either from seed or special value
+    let r = match input.use_special {
+        Some(idx) => special_scalar(idx),
+        None => Fp::from(input.scalar_seed),
+    };
+
+    // Model protocol rejection sampling: a challenge outside the canonical
+    // decomposition range fails extraction with a typed `EndoscalarRangeError`
+    // source, so the prover must retry the sampled transcript state instead of
+    // extracting it. Classifying on that error exercises the same path
+    // `EndoscalarChallenge::sample` grinds on; any other failure is a bug.
+    let extracted = match extract_endoscalar::<Fp>(r) {
+        Ok(extracted) => extracted,
+        Err(err) => {
+            assert!(
+                err.invalid_witness_source::<EndoscalarRangeError>()
+                    .is_some(),
+                "extraction must fail only with the typed range rejection: {err:?}"
+            );
+            return;
+        }
+    };
+    let lifted_native: Fp = lift_endoscalar(extracted);
+
+    // Determinism
+    let extracted2 =
+        extract_endoscalar::<Fp>(r).expect("range-checked endoscalar challenge should extract");
+    assert_eq!(extracted, extracted2, "extract is not deterministic");
+    assert_eq!(
+        lifted_native,
+        lift_endoscalar::<Fp>(extracted2),
+        "lift is not deterministic"
+    );
+
+    // Native point operations for oracle
+    let p = point_from_seed(input.point_seed);
+    let expected_scalar: Fq = lift_endoscalar(extracted);
+    let expected_scaled: EpAffine = (p * expected_scalar).to_affine();
+
+    // Compute expected results for point ops natively
+    let p2 = point_from_seed(input.point_seed2);
+
+    // Collect booleans needed for conditional ops
+    let cond_bools: Vec<bool> = input
+        .point_ops
+        .iter()
+        .filter_map(|op| match op {
+            PointOp::ConditionalEndo(c) | PointOp::ConditionalNegate(c) => Some(*c),
+            _ => None,
+        })
+        .collect();
+
+    let result =
+        Simulator::<Fp>::simulate((r, extracted, p, p2, cond_bools.clone()), |dr, witness| {
+            let allocator = &mut Standard::new();
+            let (r_val, _endo_val, p_val, p2_val, bool_vals) = witness.cast();
+            let r_elem = Element::alloc(dr, allocator, r_val)?;
+            let r_elem = EndoscalarChallenge::from_element(dr, allocator, r_elem)?;
+            let endo = Endoscalar::extract(r_elem);
+
+            // Circuit lift must match native lift
+            let lifted_circuit = endo.lift(dr)?;
+            assert_eq!(
+                *lifted_circuit.value().take(),
+                lifted_native,
+                "circuit lift != native lift"
+            );
+
+            // Circuit group_scale must match native
+            let point = Point::alloc(dr, p_val)?;
+            let scaled = endo.group_scale(dr, &point)?;
+            assert_eq!(
+                scaled.value().take(),
+                expected_scaled,
+                "circuit group_scale != native scaling"
+            );
+
+            // --- Point operation tests ---
+            let mut current = Point::<'_, _, EpAffine>::constant(dr, p)?;
+            let mut current_native = p;
+            let mut bool_idx = 0;
+
+            for op in &input.point_ops {
+                match op {
+                    PointOp::Endo => {
+                        current = current.endo(dr);
+                        let coords = Affine::coordinates(&current_native).unwrap();
+                        let new_x = coords.0 * Fp::ZETA;
+                        current_native = <EpAffine as Affine>::from_xy(new_x, coords.1).unwrap();
+                    }
+                    PointOp::Negate => {
+                        current = current.negate(dr);
+                        current_native = (-current_native.to_projective()).to_affine();
+                    }
+                    PointOp::Double => {
+                        current = current.double(dr)?;
+                        current_native = current_native.to_projective().double().to_affine();
+                    }
+                    PointOp::ConditionalEndo(cond) => {
+                        let b =
+                            Boolean::alloc(dr, allocator, bool_vals.as_ref().map(|v| v[bool_idx]))?;
+                        bool_idx += 1;
+                        current = current.conditional_endo(dr, &b)?;
+                        if *cond {
+                            let coords = Affine::coordinates(&current_native).unwrap();
+                            let new_x = coords.0 * Fp::ZETA;
+                            current_native =
+                                <EpAffine as Affine>::from_xy(new_x, coords.1).unwrap();
+                        }
+                    }
+                    PointOp::ConditionalNegate(cond) => {
+                        let b =
+                            Boolean::alloc(dr, allocator, bool_vals.as_ref().map(|v| v[bool_idx]))?;
+                        bool_idx += 1;
+                        current = current.conditional_negate(dr, &b)?;
+                        if *cond {
+                            current_native = (-current_native.to_projective()).to_affine();
+                        }
+                    }
+                }
+            }
+
+            // After all ops, circuit point must match native
+            let circuit_point = current.value().take();
+            assert_eq!(
+                circuit_point, current_native,
+                "point ops: circuit != native after {:?}",
+                input.point_ops
+            );
+
+            // --- add_incomplete test (distinct points) ---
+            let q = Point::<'_, _, EpAffine>::alloc(dr, p2_val)?;
+            let p_coords = p.coordinates().unwrap();
+            let p2_coords = p2.coordinates().unwrap();
+            if p_coords.0 != p2_coords.0 {
+                let p_again = Point::<'_, _, EpAffine>::constant(dr, p)?;
+                let sum = NonzeroBank::scope(dr, |dr, bank| p_again.add_incomplete(dr, &q, bank))?;
+                let expected_sum: EpAffine = (p.to_projective() + p2.to_projective()).to_affine();
+                assert_eq!(
+                    sum.value().take(),
+                    expected_sum,
+                    "add_incomplete != native addition"
+                );
+            }
+
+            Ok(())
+        });
+
+    assert!(
+        result.is_ok(),
+        "endoscalar circuit failed: {:?}",
+        result.err()
+    );
+});

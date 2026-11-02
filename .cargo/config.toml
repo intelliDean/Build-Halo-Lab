@@ -1,0 +1,3 @@
+[build]
+# Keep this educational build responsive on small machines.
+jobs = 1

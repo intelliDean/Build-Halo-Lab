@@ -1,0 +1,804 @@
+//! Field element gadget for arithmetic circuit wires.
+//!
+//! Provides the [`Element`] type representing a wire and its field element
+//! assignment, the fundamental building block for circuit construction.
+
+use alloc::vec::Vec;
+use core::borrow::Borrow;
+
+use ragu_core::{
+    Coeff, Error, Result,
+    drivers::{Driver, DriverValue, LinearExpression},
+    gadgets::{Gadget, Kind},
+    maybe::Maybe,
+};
+use udon::field::Field;
+
+use crate::{
+    Boolean, GadgetExt, Invertible, Nonzero,
+    allocator::Allocator,
+    comparison::GadgetEquals,
+    consistent::Consistent,
+    io::{Buffer, Write},
+};
+
+/// Represents a wire and its witness value.
+///
+/// `Element` is a basic wire wrapper. It does not impose an additional wire
+/// contract beyond the wire assignment represented by the driver. It also
+/// represents the fundamental code unit of serialization using the
+/// [`Write`] trait.
+///
+/// ## Usage
+///
+/// Elements can be allocated ([`Element::alloc`], [`Element::alloc_square`])
+/// with a provided witness value. Any constant field element can be turned
+/// into an [`Element`] without an allocation using [`Element::constant`] (or
+/// [`Element::one`] for the unitary case).
+///
+/// It is not possible to distinguish an [`Element`] that represents an
+/// allocated wire from a virtual wire such as a constant or the result of
+/// adding elements together. The ability to represent both is provided for
+/// convenience and to ensure that [`Element`] can implement the [`Gadget`]
+/// trait, but more efficient abstractions can avoid unnecessary constraints by
+/// preserving this distinction.
+///
+/// Elements can be added, multiplied and scaled in various ways.
+///
+/// ## Promotion
+///
+/// As with all gadgets, an [`Element`] can be [demoted](crate::promotion) but
+/// because it only represents a wire it is preferable to demote by extracting
+/// the wire using [`Element::wire`]. Promotion via [`Element::promote`] takes a
+/// bare wire instead of a demoted gadget to encourage this.
+#[derive(Gadget, Consistent)]
+pub struct Element<'dr, D: Driver<'dr>> {
+    /// A wire created by the driver.
+    #[ragu(wire)]
+    wire: D::Wire,
+
+    /// Witness data for this wire.
+    #[ragu(value)]
+    value: DriverValue<D, D::F>,
+}
+
+impl<'dr, D: Driver<'dr>> Element<'dr, D> {
+    /// Allocates an element with the provided witness value, using the
+    /// provided [`Allocator`] to create the underlying wire.
+    ///
+    /// This costs one allocation.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error from the provided [`Allocator`].
+    pub fn alloc<A: Allocator<'dr, D>>(
+        dr: &mut D,
+        allocator: &mut A,
+        assignment: DriverValue<D, D::F>,
+    ) -> Result<Self> {
+        let wire = allocator.alloc(dr, || Ok(Coeff::Arbitrary(*assignment.snag())))?;
+
+        Ok(Element {
+            value: assignment,
+            wire,
+        })
+    }
+
+    /// Allocates an element $a$ with the provided witness value and
+    /// squares it in a single step. Returns $(a, a^2)$.
+    ///
+    /// This costs one gate.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes the second returned element represent
+    /// the square of the first.
+    pub fn alloc_square(dr: &mut D, assignment: DriverValue<D, D::F>) -> Result<(Self, Self)> {
+        let square = D::just(|| assignment.snag().square());
+        let (a, b, c) = dr.mul(|| {
+            let value = *assignment.as_ref().take();
+            Ok((
+                Coeff::Arbitrary(value),
+                Coeff::Arbitrary(value),
+                Coeff::Arbitrary(*square.snag()),
+            ))
+        })?;
+        dr.enforce_equal(&a, &b)?;
+
+        Ok((
+            Element {
+                value: assignment,
+                wire: a,
+            },
+            Element {
+                value: square,
+                wire: c,
+            },
+        ))
+    }
+
+    /// Creates an element for the unitary constant value.
+    pub fn one() -> Self {
+        Element {
+            value: D::just(|| D::F::ONE),
+            wire: D::ONE,
+        }
+    }
+
+    /// Creates an element for the zero constant value.
+    pub fn zero(dr: &mut D) -> Self {
+        let wire = dr.constant(Coeff::Zero);
+        let value = D::just(|| D::F::ZERO);
+
+        Element { value, wire }
+    }
+
+    /// Creates an element for the provided constant value.
+    pub fn constant(dr: &mut D, value: D::F) -> Self {
+        let wire = dr.constant(Coeff::Arbitrary(value));
+        let value = D::just(|| value);
+
+        Element { value, wire }
+    }
+
+    /// Constructs an element from an existing wire and witness data.
+    ///
+    /// # Witness Consistency
+    ///
+    /// If witness data is present, the value must match the represented wire
+    /// assignment. If it does not, later witness generation may compute
+    /// values that violate the constraints.
+    pub fn promote(wire: D::Wire, value: DriverValue<D, D::F>) -> Self {
+        Element { wire, value }
+    }
+
+    /// Returns the witness value paired with this element.
+    pub fn value(&self) -> DriverValue<D, &D::F> {
+        self.value.as_ref()
+    }
+
+    /// Returns the wire associated with this element.
+    pub fn wire(&self) -> &D::Wire {
+        &self.wire
+    }
+
+    /// Multiplies two elements together.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes the returned element represent
+    /// `self * other`.
+    pub fn mul(&self, dr: &mut D, other: &Self) -> Result<Self> {
+        let product = D::just(|| {
+            let a = *self.value.snag();
+            let b = *other.value.snag();
+            a * b
+        });
+
+        let (a, b, c) = dr.mul(|| {
+            Ok((
+                Coeff::Arbitrary(*self.value.snag()),
+                Coeff::Arbitrary(*other.value.snag()),
+                Coeff::Arbitrary(*product.snag()),
+            ))
+        })?;
+        dr.enforce_equal(&a, self.wire())?;
+        dr.enforce_equal(&b, other.wire())?;
+
+        Ok(Element {
+            value: product,
+            wire: c,
+        })
+    }
+
+    /// Squares an element.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes the returned element represent
+    /// `self * self`.
+    pub fn square(&self, dr: &mut D) -> Result<Self> {
+        self.mul(dr, self)
+    }
+
+    /// Enforces that this element equals zero.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes this element represent zero.
+    pub fn enforce_zero(&self, dr: &mut D) -> Result<()> {
+        dr.enforce_zero(|lc| lc.add(&self.wire))
+    }
+
+    /// Negates this element.
+    pub fn negate(&self, dr: &mut D) -> Self {
+        self.scale(dr, Coeff::NegativeOne)
+    }
+
+    /// Add two elements together.
+    pub fn add(&self, dr: &mut D, other: &Self) -> Self {
+        let value = D::just(|| {
+            let a = *self.value.snag();
+            let b = *other.value.snag();
+            a + b
+        });
+
+        let wire = dr.add(|lc| lc.add(&self.wire).add(&other.wire));
+
+        Element { value, wire }
+    }
+
+    /// Subtracts another element from this one.
+    pub fn sub(&self, dr: &mut D, other: &Self) -> Self {
+        let value = D::just(|| {
+            let a = *self.value.snag();
+            let b = *other.value.snag();
+            a - b
+        });
+
+        let wire = dr.add(|lc| lc.add(&self.wire).sub(&other.wire));
+
+        Element { value, wire }
+    }
+
+    /// Add another element scaled by a constant: `self` + `other` * `coeff`.
+    pub fn add_coeff(&self, dr: &mut D, other: &Self, coeff: Coeff<D::F>) -> Self {
+        let value = D::just(|| {
+            *self.value.snag() + (Coeff::Arbitrary(*other.value.snag()) * coeff).value()
+        });
+        let wire = dr.add(|lc| lc.add(&self.wire).add_term(&other.wire, coeff));
+        Element { value, wire }
+    }
+
+    /// Scale this element by a constant.
+    pub fn scale(&self, dr: &mut D, coeff: Coeff<D::F>) -> Self {
+        let value = D::just(|| (Coeff::Arbitrary(*self.value.snag()) * coeff).value());
+        let wire = dr.add(|lc| lc.add_term(&self.wire, coeff));
+        Element { value, wire }
+    }
+
+    /// Double this element.
+    pub fn double(&self, dr: &mut D) -> Self {
+        self.add(dr, self)
+    }
+
+    /// Returns an [`Invertible`] for this element.
+    ///
+    /// This costs one gate and two constraints.
+    ///
+    /// # Soundness
+    ///
+    /// No satisfying assignment can make the represented element zero.
+    ///
+    /// # Completeness
+    ///
+    /// Witness generation succeeds when witness input for this element is
+    /// nonzero.
+    ///
+    /// # Errors
+    ///
+    /// Returns a witness-generation error if witness input for this element
+    /// is zero.
+    pub fn enforce_invertible(&self, dr: &mut D) -> Result<Invertible<'dr, D>> {
+        let invertible = Invertible::alloc(dr, self.value.clone())?;
+        self.enforce_equal(dr, invertible.element())?;
+        Ok(invertible)
+    }
+
+    /// Returns an [`Invertible`] for this element, using the provided
+    /// `inverse_value` as advice about what this element's inverse is.
+    ///
+    /// This costs one gate and two constraints.
+    ///
+    /// # Soundness
+    ///
+    /// No satisfying assignment can make the represented element zero, and the
+    /// returned inverse represents its multiplicative inverse.
+    ///
+    /// # Completeness
+    ///
+    /// Witness generation succeeds when witness input for this element is
+    /// nonzero and `inverse_value` matches its inverse.
+    ///
+    /// # Errors
+    ///
+    /// A checking driver returns a local-check error if witness input for
+    /// `inverse_value` does not satisfy the emitted constraints.
+    pub fn enforce_invertible_with(
+        &self,
+        dr: &mut D,
+        inverse_value: DriverValue<D, D::F>,
+    ) -> Result<Invertible<'dr, D>> {
+        let invertible = Invertible::alloc_with_advice(dr, self.value.clone(), inverse_value)?;
+        self.enforce_equal(dr, invertible.element())?;
+        Ok(invertible)
+    }
+
+    /// Enforces this element's nonzeroness and returns it as a [`Nonzero`].
+    ///
+    /// This costs one gate and two constraints.
+    ///
+    /// # Soundness
+    ///
+    /// No satisfying assignment can make the returned element zero.
+    ///
+    /// # Completeness
+    ///
+    /// Witness generation succeeds when witness input for this element is
+    /// nonzero.
+    ///
+    /// # Errors
+    ///
+    /// Returns a witness-generation error if witness input for this element
+    /// is zero.
+    pub fn enforce_nonzero(self, dr: &mut D) -> Result<Nonzero<'dr, D>> {
+        Ok(self.enforce_invertible(dr)?.into_element())
+    }
+
+    /// Returns the multiplicative inverse of this element.
+    ///
+    /// Convenience over [`Self::enforce_invertible`] for callers that only
+    /// need the inverse [`Element`].
+    ///
+    /// This costs one gate and two constraints.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes the returned element represent
+    /// `self^{-1}`.
+    ///
+    /// # Completeness
+    ///
+    /// Witness generation succeeds when witness input for this element is
+    /// nonzero.
+    ///
+    /// # Errors
+    ///
+    /// Returns a witness-generation error if witness input for this element
+    /// is zero.
+    pub fn invert(&self, dr: &mut D) -> Result<Self> {
+        self.enforce_invertible(dr)
+            .map(|inv| inv.into_inverse().into_inner())
+    }
+
+    /// Returns the multiplicative inverse of this element, using the provided
+    /// `inverse_value` as advice about what this element's inverse is.
+    ///
+    /// Convenience over [`Self::enforce_invertible_with`] for callers that
+    /// only need the inverse [`Element`].
+    ///
+    /// This costs one gate and two constraints.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes the returned element represent
+    /// `self^{-1}`.
+    ///
+    /// # Completeness
+    ///
+    /// Witness generation succeeds when witness input for this element is
+    /// nonzero and `inverse_value` matches its inverse.
+    ///
+    /// # Errors
+    ///
+    /// A checking driver returns a local-check error if witness input for
+    /// `inverse_value` does not satisfy the emitted constraints.
+    pub fn invert_with(&self, dr: &mut D, inverse_value: DriverValue<D, D::F>) -> Result<Self> {
+        self.enforce_invertible_with(dr, inverse_value)
+            .map(|inv| inv.into_inverse().into_inner())
+    }
+
+    /// Divides this element by `divisor` and returns the quotient.
+    ///
+    /// This costs one gate and two constraints.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes the returned element represent
+    /// `self / divisor`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a witness-generation error if the quotient assignment cannot
+    /// be computed from witness input.
+    pub fn divide(&self, dr: &mut D, divisor: &Nonzero<'dr, D>) -> Result<Self> {
+        let quotient_value = D::try_just(|| {
+            Ok(*self.value().take()
+                * divisor
+                    .value()
+                    .take()
+                    .invert()
+                    .ok_or_else(|| Error::InvalidWitness("division by zero".into()))?)
+        })?;
+
+        let (quotient, denominator, numerator) = dr.mul(|| {
+            let c = *self.value().take();
+            let b = *divisor.value().take();
+            let a = *quotient_value.snag();
+
+            Ok((
+                Coeff::Arbitrary(a),
+                Coeff::Arbitrary(b),
+                Coeff::Arbitrary(c),
+            ))
+        })?;
+        dr.enforce_equal(self.wire(), &numerator)?;
+        dr.enforce_equal(divisor.wire(), &denominator)?;
+
+        Ok(Element {
+            value: quotient_value,
+            wire: quotient,
+        })
+    }
+
+    /// Returns a boolean indicating whether this element is zero.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes the returned boolean represent whether
+    /// this element is zero.
+    pub fn is_zero(
+        &self,
+        dr: &mut D,
+        allocator: &mut impl Allocator<'dr, D>,
+    ) -> Result<Boolean<'dr, D>> {
+        crate::boolean::is_zero(dr, allocator, self)
+    }
+
+    /// Returns a boolean indicating whether this element equals another.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes the returned boolean represent whether
+    /// `self == other`.
+    pub fn is_equal(
+        &self,
+        dr: &mut D,
+        allocator: &mut impl Allocator<'dr, D>,
+        other: &Self,
+    ) -> Result<Boolean<'dr, D>> {
+        let diff = self.sub(dr, other);
+        diff.is_zero(dr, allocator)
+    }
+
+    /// Computes a weighted sum of the elements yielded by an iterator by the
+    /// powers of the provided `scale_factor`.
+    ///
+    /// Horner's method is used to evaluate the weighted sum, effectively
+    /// scaling the first element by the highest power of `scale_factor` and the
+    /// last element by nothing at all.
+    ///
+    /// # Constraints
+    ///
+    /// The iterator length determines the emitted constraints. The length must
+    /// not be derived from witness input.
+    pub fn fold<E: Borrow<Element<'dr, D>>>(
+        dr: &mut D,
+        elements: impl IntoIterator<Item = E>,
+        scale_factor: &Element<'dr, D>,
+    ) -> Result<Self> {
+        let mut iter = elements.into_iter();
+        let Some(first) = iter.next() else {
+            return Ok(Element::zero(dr));
+        };
+        iter.try_fold(first.borrow().clone(), |acc, elem| {
+            acc.mul(dr, scale_factor)
+                .map(|scaled| scaled.add(dr, elem.borrow()))
+        })
+    }
+
+    /// Enforces that `self` is a $2^k$-th root of unity, i.e.,
+    /// $\mathtt{self}^{2^k} = 1$.
+    ///
+    /// # Constraints
+    ///
+    /// `k` determines the emitted constraints.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes this element represent a $2^k$-th root
+    /// of unity.
+    pub fn enforce_root_of_unity(&self, dr: &mut D, k: u32) -> Result<()> {
+        let mut value = self.clone();
+        for _ in 0..k {
+            value = value.square(dr)?;
+        }
+        let one = Element::one();
+        let diff = value.sub(dr, &one);
+        diff.enforce_zero(dr)?;
+        Ok(())
+    }
+
+    /// Sums an iterator of elements.
+    ///
+    /// This is more efficient than [`Element::fold`] with scale=1 because it
+    /// avoids gates.
+    ///
+    /// # Constraints
+    ///
+    /// The iterator length determines the emitted virtual wire expression. The
+    /// length must not be derived from witness input.
+    pub fn sum<E: Borrow<Element<'dr, D>>>(
+        dr: &mut D,
+        elements: impl IntoIterator<Item = E>,
+    ) -> Self {
+        elements
+            .into_iter()
+            .fold(Element::zero(dr), |acc, elem| acc.add(dr, elem.borrow()))
+    }
+}
+
+impl<F: Field> Write<F> for Kind![F; @Element<'_, _>] {
+    fn write_gadget<'dr, D: Driver<'dr, F = F>, B: Buffer<'dr, D>>(
+        this: &Element<'dr, D>,
+        dr: &mut D,
+        buf: &mut B,
+    ) -> Result<()> {
+        buf.write(dr, this)
+    }
+}
+
+impl<F: Field> GadgetEquals<F> for Kind![F; @Element<'_, _>] {
+    fn enforce_equal_gadget<
+        'dr,
+        D1: Driver<'dr, F = F>,
+        D2: Driver<'dr, F = F, Wire = <D1 as Driver<'dr>>::Wire>,
+    >(
+        dr: &mut D1,
+        a: &Element<'dr, D2>,
+        b: &Element<'dr, D2>,
+    ) -> Result<()> {
+        dr.enforce_equal(a.wire(), b.wire())
+    }
+}
+
+/// Simple buffer that collects pushed values into a vector.
+impl<'dr, D: Driver<'dr>> Buffer<'dr, D> for Vec<Element<'dr, D>> {
+    fn write(&mut self, _: &mut D, value: &Element<'dr, D>) -> Result<()> {
+        Vec::push(self, value.clone());
+        Ok(())
+    }
+}
+
+/// Simple buffer that does nothing.
+impl<'dr, D: Driver<'dr>> Buffer<'dr, D> for () {
+    fn write(&mut self, _: &mut D, _: &Element<'dr, D>) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// Simple buffer that counts the number of pushes.
+impl<'dr, D: Driver<'dr>> Buffer<'dr, D> for usize {
+    fn write(&mut self, _: &mut D, _: &Element<'dr, D>) -> Result<()> {
+        *self += 1;
+        Ok(())
+    }
+}
+
+impl<'dr, D: Driver<'dr>, B: Buffer<'dr, D>> Buffer<'dr, D> for &mut B {
+    fn write(&mut self, dr: &mut D, value: &Element<'dr, D>) -> Result<()> {
+        B::write(self, dr, value)
+    }
+}
+
+/// Computes a fixed linear combination of some allocated values.
+///
+/// # Constraints
+///
+/// The number of values determines the emitted virtual wire expression. The
+/// length must not be derived from witness input.
+///
+/// # Panics
+///
+/// Panics if `values` and `coeffs` have different lengths.
+pub fn multiadd<'dr, D: Driver<'dr>>(
+    dr: &mut D,
+    values: &[Element<'dr, D>],
+    coeffs: &[D::F],
+) -> Element<'dr, D> {
+    assert_eq!(values.len(), coeffs.len());
+    let value = D::just(|| {
+        D::F::sum_of_product_pairs(
+            values
+                .iter()
+                .zip(coeffs)
+                .map(|(value, coeff)| (value.value().take(), coeff)),
+        )
+    });
+    let wire = dr.add(|mut lc| {
+        for (value, coeff) in values.iter().zip(coeffs) {
+            lc = lc.add_term(value.wire(), Coeff::Arbitrary(*coeff));
+        }
+        lc
+    });
+
+    Element::promote(wire, value)
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::{format, vec, vec::Vec};
+
+    use proptest::prelude::*;
+    use ragu_core::pasta::Fp;
+    use ragu_testing::strategies;
+    use udon::fp_hex;
+
+    use super::*;
+    use crate::allocator::Standard;
+
+    type F = Fp;
+    type Simulator = crate::Simulator<F>;
+
+    // (omega, k, should_pass)
+    fn test_cases() -> Vec<(Fp, u32, bool)> {
+        // 2^32 primitive roots of unity
+        let root_of_unity1 = Fp::new(fp_hex!(
+            "0x2bce74deac30ebda362120830561f81aea322bf2b7bb7584bdad6fabd87ea32f"
+        ));
+        let root_of_unity2 = Fp::new(fp_hex!(
+            "0x16d296aa2b2fb60c7f2cf0bd729140e59875893be132b539a16988b46a2131f1"
+        ));
+        let root_of_unity3 = Fp::new(fp_hex!(
+            "0x0e16194e05e127fc65f98157c0a42b1c050cd2c5dd8b481c9d9e9fd0a13ee1c9"
+        ));
+
+        vec![
+            // 1 is a 2^0 root of unity (1^1 = 1)
+            (Fp::ONE, 0, true),
+            // 1 is also a 2^k root of unity for any k (1^(2^k) = 1)
+            (Fp::ONE, 1, true),
+            (Fp::ONE, 2, true),
+            (Fp::ONE, 3, true),
+            (Fp::ONE, 8, true),
+            (Fp::ONE, 30, true),
+            (Fp::ONE, 31, true),
+            (Fp::ONE, 32, true),
+            (Fp::ONE, 1000, true),
+            // -1 is a 2^k root of unity where k >= 1
+            (-Fp::ONE, 0, false),
+            (-Fp::ONE, 1, true),
+            (-Fp::ONE, 2, true),
+            (-Fp::ONE, 32, true),
+            // 0 is not a root of unity for any k
+            (Fp::ZERO, 0, false),
+            (Fp::ZERO, 1, false),
+            (Fp::ZERO, 8, false),
+            (Fp::ZERO, 32, false),
+            // 2 is not a root of unity
+            (Fp::from(2), 0, false),
+            (Fp::from(2), 1, false),
+            (Fp::from(2), 8, false),
+            // Arbitrary value is (likely) not a root of unity
+            (Fp::from(0xdeadbeef), 4, false),
+            // Examples of 2^32 roots of unity
+            (root_of_unity1, 32, true),
+            (root_of_unity1, 31, false),
+            (root_of_unity1, 1, false),
+            (root_of_unity2, 32, true),
+            (root_of_unity2, 31, false),
+            (root_of_unity2, 1, false),
+            (root_of_unity3, 32, true),
+            (root_of_unity3, 31, false),
+            (root_of_unity3, 1, false),
+        ]
+    }
+
+    #[test]
+    fn test_enforce_root_of_unity() -> Result<()> {
+        for (i, (omega, k, should_pass)) in test_cases().into_iter().enumerate() {
+            let result = Simulator::simulate(omega, |dr, witness| {
+                let allocator = &mut Standard::new();
+                let omega = Element::alloc(dr, allocator, witness)?;
+                omega.enforce_root_of_unity(dr, k)?;
+                Ok(())
+            });
+
+            assert_eq!(
+                result.is_ok(),
+                should_pass,
+                "test case {i} failed: omega={omega:?}, k={k}, expected should_pass={should_pass}",
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_divide() -> Result<()> {
+        let alloc = |a: F, b: F| {
+            let sim = Simulator::simulate((a, b), |dr, witness| {
+                let (a, b) = witness.cast();
+                let allocator = &mut Standard::new();
+                let a = Element::alloc(dr, allocator, a.clone())?;
+                let b = Element::alloc(dr, allocator, b.clone())?;
+                let b = b.enforce_nonzero(dr)?;
+                dr.reset();
+
+                let quotient = a.divide(dr, &b)?;
+
+                assert_eq!(
+                    *quotient.value().take(),
+                    *a.value().take() * b.value().take().invert().unwrap()
+                );
+
+                Ok(())
+            })?;
+            assert_eq!(sim.num_gates(), 1);
+            assert_eq!(sim.num_constraints(), 2);
+            Ok(())
+        };
+
+        alloc(F::from(4578u64), F::from(372u64))?;
+        alloc(F::ZERO, F::from(372u64))?;
+        assert!(alloc(F::from(4578u64), F::ZERO).is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_invert() -> Result<()> {
+        let inv = |a: F| {
+            let sim = Simulator::simulate(a, |dr, witness| {
+                let allocator = &mut Standard::new();
+                let a = Element::alloc(dr, allocator, witness.clone())?;
+                dr.reset();
+                let ainv = a.invert(dr)?;
+
+                assert_eq!(*ainv.value().take(), a.value().take().invert().unwrap());
+
+                Ok(())
+            })?;
+            assert_eq!(sim.num_gates(), 1);
+            assert_eq!(sim.num_constraints(), 2);
+            Ok(())
+        };
+
+        inv(F::from(4578u64))?;
+        assert!(inv(F::ZERO).is_err());
+
+        Ok(())
+    }
+
+    proptest! {
+        #[test]
+        fn element_add_sub_roundtrip(
+            a_fe in strategies::prime_field_element::<F>(),
+            b_fe in strategies::prime_field_element::<F>(),
+        ) {
+            let mut actual = None;
+            Simulator::simulate((a_fe, b_fe), |dr, witness| {
+                let (a, b) = witness.cast();
+                let allocator = &mut Standard::new();
+                let a = Element::alloc(dr, allocator, a)?;
+                let b = Element::alloc(dr, allocator, b)?;
+                let sum = a.add(dr, &b);
+                let result = sum.sub(dr, &b);
+                actual = Some(*result.value().take());
+                Ok(())
+            }).map_err(|e| TestCaseError::fail(format!("{e:?}")))?;
+
+            prop_assert_eq!(actual, Some(a_fe));
+        }
+
+        #[test]
+        fn element_mul_commutative(
+            a_fe in strategies::prime_field_element::<F>(),
+            b_fe in strategies::prime_field_element::<F>(),
+        ) {
+            let mut actual = None;
+            Simulator::simulate((a_fe, b_fe), |dr, witness| {
+                let (a, b) = witness.cast();
+                let allocator = &mut Standard::new();
+                let a = Element::alloc(dr, allocator, a)?;
+                let b = Element::alloc(dr, allocator, b)?;
+                let ab = a.mul(dr, &b)?;
+                let ba = b.mul(dr, &a)?;
+                actual = Some((*ab.value().take(), *ba.value().take()));
+                Ok(())
+            }).map_err(|e| TestCaseError::fail(format!("{e:?}")))?;
+
+            prop_assert_eq!(actual, Some((a_fe * b_fe, b_fe * a_fe)));
+        }
+    }
+}

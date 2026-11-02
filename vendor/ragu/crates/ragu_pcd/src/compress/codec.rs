@@ -1,0 +1,252 @@
+//! Build Halo Lab's original transport adapter for pinned Ragu 4e3d08d.
+//! This module changes no cryptographic equations. It exposes a strict canonical
+//! binary encoding because upstream has no public proof serialization API.
+use super::{
+    CompressedProof, Messages,
+    batch::Batch,
+    instance::{Child, Instance, NestedChild, OPENED},
+    revdot::{
+        Reduction,
+        fold::{Derived, Fold},
+        native_components, nested_components,
+    },
+};
+use crate::ipa::IpaProof;
+use alloc::vec::Vec;
+use ragu_circuits::{polynomials::Rank, registry::CircuitIndex};
+use ragu_core::{Cycle, Error, Result};
+use udon::{curve::Affine, field::Field};
+const MAGIC: &[u8; 8] = b"BHLRAG01";
+fn invalid() -> Error {
+    Error::InvalidWitness("invalid canonical compressed proof encoding".into())
+}
+struct Writer(Vec<u8>);
+impl Writer {
+    fn int(&mut self, v: u32) {
+        self.0.extend_from_slice(&v.to_le_bytes());
+    }
+    fn field<F: Field>(&mut self, v: F) {
+        self.0.extend_from_slice(v.to_bytes().as_ref());
+    }
+    fn point<P: Affine>(&mut self, v: P) {
+        self.0.extend_from_slice(v.to_bytes().as_ref());
+    }
+    fn fields<F: Field>(&mut self, v: &[F]) {
+        self.int(v.len() as u32);
+        for &x in v {
+            self.field(x);
+        }
+    }
+    fn points<P: Affine>(&mut self, v: &[P]) {
+        self.int(v.len() as u32);
+        for &x in v {
+            self.point(x);
+        }
+    }
+    fn child<F: Field>(&mut self, c: &Child<F>) {
+        self.field(c.x);
+        self.field(c.y);
+        self.field(c.id);
+    }
+    fn nested_child<F: Field>(&mut self, c: &NestedChild<F>) {
+        self.field(c.x);
+        self.field(c.y);
+    }
+    fn messages<P: Affine>(&mut self, m: &Messages<P>) {
+        let r = &m.reduction;
+        let f = &r.fold;
+        self.point(f.inner);
+        self.point(f.outer);
+        self.field(f.inner_epsilon);
+        self.field(f.outer_epsilon);
+        self.point(r.p);
+        self.point(r.q);
+        self.fields(&r.openings);
+        self.field(r.p_at_inverse_r);
+        self.field(r.q_at_r);
+        self.point(m.batch.f);
+        self.fields(&m.batch.evaluations);
+        self.point(m.opening.s_commitment);
+        self.int(m.opening.rounds.len() as u32);
+        for &(l, r) in &m.opening.rounds {
+            self.point(l);
+            self.point(r);
+        }
+        self.field(m.opening.c);
+    }
+}
+struct Reader<'a> {
+    bytes: &'a [u8],
+    at: usize,
+}
+impl Reader<'_> {
+    fn bytes(&mut self, n: usize) -> Result<&[u8]> {
+        let end = self.at.checked_add(n).ok_or_else(invalid)?;
+        let slice = self.bytes.get(self.at..end).ok_or_else(invalid)?;
+        self.at = end;
+        Ok(slice)
+    }
+    fn int(&mut self) -> Result<u32> {
+        Ok(u32::from_le_bytes(
+            self.bytes(4)?.try_into().map_err(|_| invalid())?,
+        ))
+    }
+    fn field<F: Field>(&mut self) -> Result<F> {
+        let mut repr = F::ZERO.to_bytes();
+        let n = repr.as_ref().len();
+        repr.as_mut().copy_from_slice(self.bytes(n)?);
+        F::from_bytes(repr).ok_or_else(invalid)
+    }
+    fn point<P: Affine>(&mut self) -> Result<P> {
+        let mut repr = P::identity().to_bytes();
+        let n = repr.as_ref().len();
+        repr.as_mut().copy_from_slice(self.bytes(n)?);
+        P::from_bytes(repr).ok_or_else(invalid)
+    }
+    fn fields<F: Field>(&mut self, len: usize) -> Result<Vec<F>> {
+        if self.int()? as usize != len {
+            return Err(invalid());
+        }
+        (0..len).map(|_| self.field()).collect()
+    }
+    fn points<P: Affine>(&mut self, len: usize) -> Result<Vec<P>> {
+        if self.int()? as usize != len {
+            return Err(invalid());
+        }
+        (0..len).map(|_| self.point()).collect()
+    }
+    fn child<F: Field>(&mut self) -> Result<Child<F>> {
+        Ok(Child {
+            x: self.field()?,
+            y: self.field()?,
+            id: self.field()?,
+        })
+    }
+    fn nested_child<F: Field>(&mut self) -> Result<NestedChild<F>> {
+        Ok(NestedChild {
+            x: self.field()?,
+            y: self.field()?,
+        })
+    }
+    fn messages<P: Affine, R: Rank>(&mut self) -> Result<Messages<P>> {
+        let fold = Fold {
+            inner: self.point()?,
+            outer: self.point()?,
+            inner_epsilon: self.field()?,
+            outer_epsilon: self.field()?,
+        };
+        let reduction = Reduction {
+            fold,
+            p: self.point()?,
+            q: self.point()?,
+            openings: self.fields(Derived::ALL.len())?,
+            p_at_inverse_r: self.field()?,
+            q_at_r: self.field()?,
+        };
+        let batch = Batch {
+            f: self.point()?,
+            evaluations: self.fields(Derived::ALL.len() + 2 + OPENED)?,
+        };
+        let s_commitment = self.point()?;
+        if self.int()? != R::RANK {
+            return Err(invalid());
+        }
+        let rounds = (0..R::RANK)
+            .map(|_| Ok((self.point()?, self.point()?)))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Messages {
+            reduction,
+            batch,
+            opening: IpaProof {
+                s_commitment,
+                rounds,
+                c: self.field()?,
+            },
+        })
+    }
+}
+impl<C: Cycle> CompressedProof<C> {
+    /// Encodes the complete compressed proof in the Build Halo Lab v1 format.
+    /// Fixed canonical field/point bytes and explicit little-endian u32 lengths
+    /// are used. The expected output header is deliberately supplied separately.
+    pub fn to_canonical_bytes(&self) -> Vec<u8> {
+        let mut w = Writer(Vec::new());
+        w.0.extend_from_slice(MAGIC);
+        let i = &self.instance;
+        // Both sides have one IPA round per rank bit.
+        w.int(self.native.opening.rounds.len() as u32);
+        w.int(i.left_header.len() as u32);
+        w.int(usize::from(i.circuit_id) as u32);
+        w.fields(&i.left_header);
+        w.fields(&i.right_header);
+        w.points(&i.native);
+        w.point(i.native_registry_xy);
+        w.point(i.native_p);
+        w.points(&i.nested);
+        w.point(i.nested_registry_xy);
+        w.point(i.nested_p);
+        w.point(i.nested_challenges_partial);
+        w.field(i.bridge_alpha);
+        w.field(i.c);
+        w.field(i.v);
+        w.field(i.nested_c);
+        w.field(i.nested_v);
+        w.child(&i.left);
+        w.child(&i.right);
+        w.field(i.a_at_u);
+        w.field(i.b_at_u);
+        w.nested_child(&i.nested_left);
+        w.nested_child(&i.nested_right);
+        w.field(i.nested_a_at_u);
+        w.field(i.nested_b_at_u);
+        w.messages(&self.native);
+        w.messages(&self.nested);
+        w.0
+    }
+    /// Decodes canonical bytes for an independently fixed rank/header size.
+    /// Rejects truncation, trailing bytes, wrong dimensions, oversized inputs,
+    /// noncanonical scalars and invalid compressed group points before verifying.
+    pub fn from_canonical_bytes<R: Rank, const H: usize>(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() > 131072 || H > 64 {
+            return Err(invalid());
+        }
+        let mut r = Reader { bytes, at: 0 };
+        if r.bytes(8)? != MAGIC || r.int()? != R::RANK || r.int()? as usize != H {
+            return Err(invalid());
+        }
+        let instance = Instance {
+            circuit_id: CircuitIndex::from_u32(r.int()?),
+            left_header: r.fields(H)?,
+            right_header: r.fields(H)?,
+            native: r.points(native_components().count())?,
+            native_registry_xy: r.point()?,
+            native_p: r.point()?,
+            nested: r.points(nested_components().count())?,
+            nested_registry_xy: r.point()?,
+            nested_p: r.point()?,
+            nested_challenges_partial: r.point()?,
+            bridge_alpha: r.field()?,
+            c: r.field()?,
+            v: r.field()?,
+            nested_c: r.field()?,
+            nested_v: r.field()?,
+            left: r.child()?,
+            right: r.child()?,
+            a_at_u: r.field()?,
+            b_at_u: r.field()?,
+            nested_left: r.nested_child()?,
+            nested_right: r.nested_child()?,
+            nested_a_at_u: r.field()?,
+            nested_b_at_u: r.field()?,
+        };
+        let proof = Self {
+            instance,
+            native: r.messages::<_, R>()?,
+            nested: r.messages::<_, R>()?,
+        };
+        if r.at != bytes.len() || !proof.well_formed::<R>() || proof.to_canonical_bytes() != bytes {
+            return Err(invalid());
+        }
+        Ok(proof)
+    }
+}

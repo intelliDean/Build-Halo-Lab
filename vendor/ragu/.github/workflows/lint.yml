@@ -1,0 +1,54 @@
+name: Lint
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.rs'
+      - 'qa/params/**'
+  pull_request:
+    paths:
+      - '**/*.rs'
+      - 'qa/params/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Enforce use of Bound<'dr, D, K> alias instead of verbose GadgetKind::Rebind patterns
+  bound-alias:
+    name: bound alias check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Check for verbose GadgetKind::Rebind patterns
+        run: |
+          # Check for UFCS patterns like <K as GadgetKind<...>>::Rebind
+          # Allowed: gadgets.rs (defines Bound alias and trait)
+          if grep -rn --include='*.rs' 'as GadgetKind.*>::Rebind' . | grep -v 'crates/ragu_core/src/gadgets.rs'; then
+            echo "::error::Found verbose GadgetKind::Rebind UFCS pattern. Use Bound<'dr, D, K> alias instead."
+            exit 1
+          fi
+
+  # Regenerate the Poseidon round constants and MDS matrices from the Grain
+  # LFSR and fail if the committed tables differ. Nothing else in the tree
+  # pins those values: the permutation and every proof over it are generic in
+  # the parameters, so a wrong constant is invisible to them.
+  poseidon-params:
+    name: poseidon parameter provenance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Setup Rust
+        uses: ./.github/actions/rust-setup
+        with:
+          cache-suffix: poseidon-provenance
+      - name: Regenerate and compare
+        run: python3 qa/params/check_poseidon_params.py

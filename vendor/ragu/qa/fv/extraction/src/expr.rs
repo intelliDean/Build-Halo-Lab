@@ -1,0 +1,55 @@
+use std::sync::Arc;
+
+use ragu_core::Coeff;
+use udon::field::Field;
+
+/// A symbolic expression over wire indices.
+///
+/// Mirrors Clean's `Expression F` inductive type:
+/// ```lean
+/// inductive Expression (F : Type) where
+///   | var   : Variable F → Expression F
+///   | const : F → Expression F
+///   | add   : Expression F → Expression F → Expression F
+///   | mul   : Expression F → Expression F → Expression F
+/// ```
+///
+/// Physical wires (allocated by [`ragu_core::drivers::DriverTypes::gate`]
+/// and [`ragu_core::drivers::DriverTypes::assign_extra`] on
+/// [`super::driver::ExtractionDriver`]) are represented as [`Expr::Var`].
+/// Virtual wires (returned by [`ragu_core::drivers::Driver::add`]) are
+/// expression trees built by composing [`Expr::Add`] and [`Expr::Mul`] nodes.
+///
+/// Children are reference-counted, so the expressions a circuit builds form a
+/// DAG: an `Element::double` of a virtual wire records `Add(w, w)` sharing `w`
+/// instead of copying it. This keeps extraction linear in the number of driver
+/// calls even when a gadget feeds its own symbolic output back into the next
+/// iteration (`Endoscalar::lift`, `Endoscalar::group_scale`). The fingerprint
+/// never hashes this shape; it hashes the expression's canonical polynomial
+/// normal form (see [`crate::fingerprint`]).
+#[derive(Clone)]
+pub enum Expr<F: Field> {
+    /// A physical wire identified by its allocation index.
+    Var(usize),
+    /// A physical input wire identified by its allocation index.
+    InputVar(usize),
+    /// A field element constant (stored symbolically as [`Coeff`]).
+    Const(Coeff<F>),
+    /// Sum of two sub-expressions.
+    Add(Arc<Expr<F>>, Arc<Expr<F>>),
+    /// Product of two sub-expressions.
+    Mul(Arc<Expr<F>>, Arc<Expr<F>>),
+}
+
+/// A single operation collected during circuit synthesis.
+///
+/// Mirrors the flat operations of Clean's `FlatOperation F`:
+/// - `Witness` corresponds to `FlatOperation.witness`
+/// - `Assert` corresponds to `FlatOperation.assert`
+pub enum Op<F: Field> {
+    /// Allocation of `count` consecutive wires. Indices are implicit in the
+    /// order this op appears in the surrounding sequence.
+    Witness { count: usize },
+    /// Constraint that the given expression must evaluate to zero.
+    Assert(Expr<F>),
+}

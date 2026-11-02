@@ -1,0 +1,484 @@
+{
+  "hardware": {
+    "os": "Windows-10-10.0.26200-SP0",
+    "machine": "AMD64",
+    "logical_cpus": 8,
+    "cpu": "11th Gen Intel(R) Core(TM) i5-1145G7 @ 2.60GHz",
+    "ram_bytes": 16844550144
+  },
+  "mode": "release",
+  "samples_per_case": 1,
+  "timing_note": "Single real run, no statistical confidence claimed. CLI times separate setup; proving includes compression.",
+  "started_utc": "2026-10-20T16:58:54Z",
+  "runs": [
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "ipa-demo",
+        "--length",
+        "1"
+      ],
+      "returncode": 0,
+      "wall_ms": 1587.772800005041,
+      "stdout": "{\"command\":\"ipa-demo\",\"hiding\":false,\"length\":1,\"proof_bytes\":76,\"proving_ms\":0.1548,\"setup_ms\":0.22790000000000002,\"verification_ms\":0.21660000000000001,\"verified\":true}\n",
+      "stderr": "",
+      "expected_success": true,
+      "metrics": {
+        "command": "ipa-demo",
+        "hiding": false,
+        "length": 1,
+        "proof_bytes": 76,
+        "proving_ms": 0.1548,
+        "setup_ms": 0.22790000000000002,
+        "verification_ms": 0.21660000000000001,
+        "verified": true
+      }
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "ipa-demo",
+        "--length",
+        "2"
+      ],
+      "returncode": 0,
+      "wall_ms": 81.07959991320968,
+      "stdout": "{\"command\":\"ipa-demo\",\"hiding\":false,\"length\":2,\"proof_bytes\":140,\"proving_ms\":0.7678999999999999,\"setup_ms\":0.314,\"verification_ms\":0.6047,\"verified\":true}\n",
+      "stderr": "",
+      "expected_success": true,
+      "metrics": {
+        "command": "ipa-demo",
+        "hiding": false,
+        "length": 2,
+        "proof_bytes": 140,
+        "proving_ms": 0.7678999999999999,
+        "setup_ms": 0.314,
+        "verification_ms": 0.6047,
+        "verified": true
+      }
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "ipa-demo",
+        "--length",
+        "4"
+      ],
+      "returncode": 0,
+      "wall_ms": 88.2259999634698,
+      "stdout": "{\"command\":\"ipa-demo\",\"hiding\":false,\"length\":4,\"proof_bytes\":204,\"proving_ms\":1.3583,\"setup_ms\":0.5628,\"verification_ms\":0.9443,\"verified\":true}\n",
+      "stderr": "",
+      "expected_success": true,
+      "metrics": {
+        "command": "ipa-demo",
+        "hiding": false,
+        "length": 4,
+        "proof_bytes": 204,
+        "proving_ms": 1.3583,
+        "setup_ms": 0.5628,
+        "verification_ms": 0.9443,
+        "verified": true
+      }
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "ipa-demo",
+        "--length",
+        "8"
+      ],
+      "returncode": 0,
+      "wall_ms": 86.02859999518842,
+      "stdout": "{\"command\":\"ipa-demo\",\"hiding\":false,\"length\":8,\"proof_bytes\":268,\"proving_ms\":3.9166000000000003,\"setup_ms\":1.1747,\"verification_ms\":1.9829999999999999,\"verified\":true}\n",
+      "stderr": "",
+      "expected_success": true,
+      "metrics": {
+        "command": "ipa-demo",
+        "hiding": false,
+        "length": 8,
+        "proof_bytes": 268,
+        "proving_ms": 3.9166000000000003,
+        "setup_ms": 1.1747,
+        "verification_ms": 1.9829999999999999,
+        "verified": true
+      }
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "ipa-demo",
+        "--length",
+        "3"
+      ],
+      "returncode": 1,
+      "wall_ms": 81.43479994032532,
+      "stdout": "",
+      "stderr": "error: InvalidLength\n",
+      "expected_success": false
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "prove-chain",
+        "--initial",
+        "2",
+        "--steps",
+        "1",
+        "--out",
+        "evidence\\measured\\chain-1.bin"
+      ],
+      "returncode": 0,
+      "wall_ms": 15429.377900087275,
+      "stdout": "{\"command\":\"prove-chain\",\"includes_terminal_compression\":true,\"proof_bytes\":7516,\"proof_file\":\"evidence\\\\measured\\\\chain-1.bin\",\"proving_ms\":10121.3719,\"setup_ms\":5207.1317,\"statement\":{\"final_value\":\"0x0700000000000000000000000000000000000000000000000000000000000000\",\"initial\":\"0x0200000000000000000000000000000000000000000000000000000000000000\",\"steps\":1}}\n",
+      "stderr": "",
+      "expected_success": true,
+      "metrics": {
+        "command": "prove-chain",
+        "includes_terminal_compression": true,
+        "proof_bytes": 7516,
+        "proof_file": "evidence\\measured\\chain-1.bin",
+        "proving_ms": 10121.3719,
+        "setup_ms": 5207.1317,
+        "statement": {
+          "final_value": "0x0700000000000000000000000000000000000000000000000000000000000000",
+          "initial": "0x0200000000000000000000000000000000000000000000000000000000000000",
+          "steps": 1
+        }
+      }
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "verify-chain",
+        "--initial",
+        "0x0200000000000000000000000000000000000000000000000000000000000000",
+        "--final",
+        "0x0700000000000000000000000000000000000000000000000000000000000000",
+        "--steps",
+        "1",
+        "--proof",
+        "evidence\\measured\\chain-1.bin"
+      ],
+      "returncode": 0,
+      "wall_ms": 4820.048800087534,
+      "stdout": "{\"command\":\"verify-chain\",\"proof_bytes\":7516,\"setup_ms\":3883.8848000000003,\"statement\":{\"final_value\":\"0x0700000000000000000000000000000000000000000000000000000000000000\",\"initial\":\"0x0200000000000000000000000000000000000000000000000000000000000000\",\"steps\":1},\"terminal_accumulator_checks\":true,\"verification_ms\":845.6913000000001,\"verified\":true}\n",
+      "stderr": "",
+      "expected_success": true,
+      "metrics": {
+        "command": "verify-chain",
+        "proof_bytes": 7516,
+        "setup_ms": 3883.8848000000003,
+        "statement": {
+          "final_value": "0x0700000000000000000000000000000000000000000000000000000000000000",
+          "initial": "0x0200000000000000000000000000000000000000000000000000000000000000",
+          "steps": 1
+        },
+        "terminal_accumulator_checks": true,
+        "verification_ms": 845.6913000000001,
+        "verified": true
+      }
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "verify-chain",
+        "--initial",
+        "0x0300000000000000000000000000000000000000000000000000000000000000",
+        "--final",
+        "0x0700000000000000000000000000000000000000000000000000000000000000",
+        "--steps",
+        "1",
+        "--proof",
+        "evidence\\measured\\chain-1.bin"
+      ],
+      "returncode": 1,
+      "wall_ms": 5243.696799967438,
+      "stdout": "",
+      "stderr": "error: proof rejected for expected public statement\n",
+      "expected_success": false
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "verify-chain",
+        "--initial",
+        "0x0200000000000000000000000000000000000000000000000000000000000000",
+        "--final",
+        "0x0b00000000000000000000000000000000000000000000000000000000000000",
+        "--steps",
+        "1",
+        "--proof",
+        "evidence\\measured\\chain-1.bin"
+      ],
+      "returncode": 1,
+      "wall_ms": 5385.8126000268385,
+      "stdout": "",
+      "stderr": "error: proof rejected for expected public statement\n",
+      "expected_success": false
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "verify-chain",
+        "--initial",
+        "0x0200000000000000000000000000000000000000000000000000000000000000",
+        "--final",
+        "0x0700000000000000000000000000000000000000000000000000000000000000",
+        "--steps",
+        "2",
+        "--proof",
+        "evidence\\measured\\chain-1.bin"
+      ],
+      "returncode": 1,
+      "wall_ms": 5034.240999957547,
+      "stdout": "",
+      "stderr": "error: proof rejected for expected public statement\n",
+      "expected_success": false
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "verify-chain",
+        "--initial",
+        "0x0200000000000000000000000000000000000000000000000000000000000000",
+        "--final",
+        "0x0700000000000000000000000000000000000000000000000000000000000000",
+        "--steps",
+        "1",
+        "--proof",
+        "evidence\\measured\\truncated.bin"
+      ],
+      "returncode": 1,
+      "wall_ms": 4568.204600014724,
+      "stdout": "",
+      "stderr": "error: proof rejected for expected public statement\n",
+      "expected_success": false
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "verify-chain",
+        "--initial",
+        "0x0200000000000000000000000000000000000000000000000000000000000000",
+        "--final",
+        "0x0700000000000000000000000000000000000000000000000000000000000000",
+        "--steps",
+        "1",
+        "--proof",
+        "evidence\\measured\\trailing.bin"
+      ],
+      "returncode": 1,
+      "wall_ms": 4991.354499943554,
+      "stdout": "",
+      "stderr": "error: proof rejected for expected public statement\n",
+      "expected_success": false
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "verify-chain",
+        "--initial",
+        "0x0200000000000000000000000000000000000000000000000000000000000000",
+        "--final",
+        "0x0700000000000000000000000000000000000000000000000000000000000000",
+        "--steps",
+        "1",
+        "--proof",
+        "evidence\\measured\\modified.bin"
+      ],
+      "returncode": 1,
+      "wall_ms": 7273.535500047728,
+      "stdout": "",
+      "stderr": "error: proof rejected for expected public statement\n",
+      "expected_success": false
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "prove-chain",
+        "--initial",
+        "2",
+        "--steps",
+        "2",
+        "--out",
+        "evidence\\measured\\chain-2.bin"
+      ],
+      "returncode": 0,
+      "wall_ms": 17835.071500041522,
+      "stdout": "{\"command\":\"prove-chain\",\"includes_terminal_compression\":true,\"proof_bytes\":7516,\"proof_file\":\"evidence\\\\measured\\\\chain-2.bin\",\"proving_ms\":12992.2736,\"setup_ms\":4760.552600000001,\"statement\":{\"final_value\":\"0x3400000000000000000000000000000000000000000000000000000000000000\",\"initial\":\"0x0200000000000000000000000000000000000000000000000000000000000000\",\"steps\":2}}\n",
+      "stderr": "",
+      "expected_success": true,
+      "metrics": {
+        "command": "prove-chain",
+        "includes_terminal_compression": true,
+        "proof_bytes": 7516,
+        "proof_file": "evidence\\measured\\chain-2.bin",
+        "proving_ms": 12992.2736,
+        "setup_ms": 4760.552600000001,
+        "statement": {
+          "final_value": "0x3400000000000000000000000000000000000000000000000000000000000000",
+          "initial": "0x0200000000000000000000000000000000000000000000000000000000000000",
+          "steps": 2
+        }
+      }
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "verify-chain",
+        "--initial",
+        "0x0200000000000000000000000000000000000000000000000000000000000000",
+        "--final",
+        "0x3400000000000000000000000000000000000000000000000000000000000000",
+        "--steps",
+        "2",
+        "--proof",
+        "evidence\\measured\\chain-2.bin"
+      ],
+      "returncode": 0,
+      "wall_ms": 5350.256499950774,
+      "stdout": "{\"command\":\"verify-chain\",\"proof_bytes\":7516,\"setup_ms\":4345.0597,\"statement\":{\"final_value\":\"0x3400000000000000000000000000000000000000000000000000000000000000\",\"initial\":\"0x0200000000000000000000000000000000000000000000000000000000000000\",\"steps\":2},\"terminal_accumulator_checks\":true,\"verification_ms\":925.8116,\"verified\":true}\n",
+      "stderr": "",
+      "expected_success": true,
+      "metrics": {
+        "command": "verify-chain",
+        "proof_bytes": 7516,
+        "setup_ms": 4345.0597,
+        "statement": {
+          "final_value": "0x3400000000000000000000000000000000000000000000000000000000000000",
+          "initial": "0x0200000000000000000000000000000000000000000000000000000000000000",
+          "steps": 2
+        },
+        "terminal_accumulator_checks": true,
+        "verification_ms": 925.8116,
+        "verified": true
+      }
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "prove-chain",
+        "--initial",
+        "2",
+        "--steps",
+        "4",
+        "--out",
+        "evidence\\measured\\chain-4.bin"
+      ],
+      "returncode": 0,
+      "wall_ms": 26087.051299982704,
+      "stdout": "{\"command\":\"prove-chain\",\"includes_terminal_compression\":true,\"proof_bytes\":7516,\"proof_file\":\"evidence\\\\measured\\\\chain-4.bin\",\"proving_ms\":21783.0885,\"setup_ms\":4233.1263,\"statement\":{\"final_value\":\"0x6cd06f0000000000000000000000000000000000000000000000000000000000\",\"initial\":\"0x0200000000000000000000000000000000000000000000000000000000000000\",\"steps\":4}}\n",
+      "stderr": "",
+      "expected_success": true,
+      "metrics": {
+        "command": "prove-chain",
+        "includes_terminal_compression": true,
+        "proof_bytes": 7516,
+        "proof_file": "evidence\\measured\\chain-4.bin",
+        "proving_ms": 21783.0885,
+        "setup_ms": 4233.1263,
+        "statement": {
+          "final_value": "0x6cd06f0000000000000000000000000000000000000000000000000000000000",
+          "initial": "0x0200000000000000000000000000000000000000000000000000000000000000",
+          "steps": 4
+        }
+      }
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "verify-chain",
+        "--initial",
+        "0x0200000000000000000000000000000000000000000000000000000000000000",
+        "--final",
+        "0x6cd06f0000000000000000000000000000000000000000000000000000000000",
+        "--steps",
+        "4",
+        "--proof",
+        "evidence\\measured\\chain-4.bin"
+      ],
+      "returncode": 0,
+      "wall_ms": 5100.098600029014,
+      "stdout": "{\"command\":\"verify-chain\",\"proof_bytes\":7516,\"setup_ms\":4323.0873,\"statement\":{\"final_value\":\"0x6cd06f0000000000000000000000000000000000000000000000000000000000\",\"initial\":\"0x0200000000000000000000000000000000000000000000000000000000000000\",\"steps\":4},\"terminal_accumulator_checks\":true,\"verification_ms\":696.9686,\"verified\":true}\n",
+      "stderr": "",
+      "expected_success": true,
+      "metrics": {
+        "command": "verify-chain",
+        "proof_bytes": 7516,
+        "setup_ms": 4323.0873,
+        "statement": {
+          "final_value": "0x6cd06f0000000000000000000000000000000000000000000000000000000000",
+          "initial": "0x0200000000000000000000000000000000000000000000000000000000000000",
+          "steps": 4
+        },
+        "terminal_accumulator_checks": true,
+        "verification_ms": 696.9686,
+        "verified": true
+      }
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "prove-chain",
+        "--initial",
+        "2",
+        "--steps",
+        "8",
+        "--out",
+        "evidence\\measured\\chain-8.bin"
+      ],
+      "returncode": 0,
+      "wall_ms": 44182.2832999751,
+      "stdout": "{\"command\":\"prove-chain\",\"includes_terminal_compression\":true,\"proof_bytes\":7516,\"proof_file\":\"evidence\\\\measured\\\\chain-8.bin\",\"proving_ms\":39614.2989,\"setup_ms\":4495.1746,\"statement\":{\"final_value\":\"0xaf7abb7f9a800a3b5e210f753075c184e74df639ea11b2239e2273c1032d203a\",\"initial\":\"0x0200000000000000000000000000000000000000000000000000000000000000\",\"steps\":8}}\n",
+      "stderr": "",
+      "expected_success": true,
+      "metrics": {
+        "command": "prove-chain",
+        "includes_terminal_compression": true,
+        "proof_bytes": 7516,
+        "proof_file": "evidence\\measured\\chain-8.bin",
+        "proving_ms": 39614.2989,
+        "setup_ms": 4495.1746,
+        "statement": {
+          "final_value": "0xaf7abb7f9a800a3b5e210f753075c184e74df639ea11b2239e2273c1032d203a",
+          "initial": "0x0200000000000000000000000000000000000000000000000000000000000000",
+          "steps": 8
+        }
+      }
+    },
+    {
+      "command": [
+        "C:\\Users\\NewOwner\\Documents\\Codex\\2026-10-20\\build-build-halo-lab-a-working\\work\\ragu\\target\\release\\lab-cli.exe",
+        "verify-chain",
+        "--initial",
+        "0x0200000000000000000000000000000000000000000000000000000000000000",
+        "--final",
+        "0xaf7abb7f9a800a3b5e210f753075c184e74df639ea11b2239e2273c1032d203a",
+        "--steps",
+        "8",
+        "--proof",
+        "evidence\\measured\\chain-8.bin"
+      ],
+      "returncode": 0,
+      "wall_ms": 6329.058900009841,
+      "stdout": "{\"command\":\"verify-chain\",\"proof_bytes\":7516,\"setup_ms\":5157.201599999999,\"statement\":{\"final_value\":\"0xaf7abb7f9a800a3b5e210f753075c184e74df639ea11b2239e2273c1032d203a\",\"initial\":\"0x0200000000000000000000000000000000000000000000000000000000000000\",\"steps\":8},\"terminal_accumulator_checks\":true,\"verification_ms\":1078.5496,\"verified\":true}\n",
+      "stderr": "",
+      "expected_success": true,
+      "metrics": {
+        "command": "verify-chain",
+        "proof_bytes": 7516,
+        "setup_ms": 5157.201599999999,
+        "statement": {
+          "final_value": "0xaf7abb7f9a800a3b5e210f753075c184e74df639ea11b2239e2273c1032d203a",
+          "initial": "0x0200000000000000000000000000000000000000000000000000000000000000",
+          "steps": 8
+        },
+        "terminal_accumulator_checks": true,
+        "verification_ms": 1078.5496,
+        "verified": true
+      }
+    }
+  ],
+  "completed_utc": "2026-10-20T17:01:34Z",
+  "passed": true
+}
