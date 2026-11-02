@@ -1,0 +1,146 @@
+{
+  "repository": "intelliDean/Build-Halo-Lab",
+  "workflow_name": "lab",
+  "run_id": 41509961599,
+  "run_number": 1,
+  "html_url": "https://github.com/intelliDean/Build-Halo-Lab/actions/runs/41509961599",
+  "head_branch": "main",
+  "head_sha": "e22eb2a33e0c750aa974e29775de9b5f96fca80b",
+  "event": "push",
+  "status": "completed",
+  "conclusion": "success",
+  "created_at": "2026-11-02T19:26:32Z",
+  "updated_at": "2026-11-02T19:38:14Z",
+  "job": {
+    "id": 125498941001,
+    "name": "verify",
+    "runner_name": "GitHub Actions 1000003090",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-11-02T19:26:35Z",
+    "completed_at": "2026-11-02T19:38:13Z",
+    "steps": [
+      {
+        "number": 1,
+        "name": "Set up job",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-02T19:26:36Z",
+        "completed_at": "2026-11-02T19:26:36Z"
+      },
+      {
+        "number": 2,
+        "name": "Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-02T19:26:36Z",
+        "completed_at": "2026-11-02T19:26:38Z"
+      },
+      {
+        "number": 3,
+        "name": "Install pinned toolchain",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-02T19:26:38Z",
+        "completed_at": "2026-11-02T19:26:45Z"
+      },
+      {
+        "number": 4,
+        "name": "Run cargo fmt --all --check",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-02T19:26:45Z",
+        "completed_at": "2026-11-02T19:26:46Z"
+      },
+      {
+        "number": 5,
+        "name": "Run cargo test --workspace --locked --release",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-02T19:26:46Z",
+        "completed_at": "2026-11-02T19:32:10Z"
+      },
+      {
+        "number": 6,
+        "name": "Existing official Ragu example",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-02T19:32:10Z",
+        "completed_at": "2026-11-02T19:36:00Z"
+      },
+      {
+        "number": 7,
+        "name": "Run cargo clippy --workspace --all-targets --locked --release -- -D warnings",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-02T19:36:00Z",
+        "completed_at": "2026-11-02T19:36:37Z"
+      },
+      {
+        "number": 8,
+        "name": "Run cargo build --locked --release -p lab-cli",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-02T19:36:37Z",
+        "completed_at": "2026-11-02T19:36:38Z"
+      },
+      {
+        "number": 9,
+        "name": "Acceptance validator regression tests",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-02T19:36:38Z",
+        "completed_at": "2026-11-02T19:36:38Z"
+      },
+      {
+        "number": 10,
+        "name": "Separate-process acceptance and measurements",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-02T19:36:38Z",
+        "completed_at": "2026-11-02T19:38:09Z"
+      },
+      {
+        "number": 11,
+        "name": "Assess worked lesson solution",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-02T19:38:09Z",
+        "completed_at": "2026-11-02T19:38:09Z"
+      },
+      {
+        "number": 12,
+        "name": "Retain measured evidence",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-02T19:38:09Z",
+        "completed_at": "2026-11-02T19:38:10Z"
+      },
+      {
+        "number": 24,
+        "name": "Post Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-02T19:38:10Z",
+        "completed_at": "2026-11-02T19:38:10Z"
+      },
+      {
+        "number": 25,
+        "name": "Complete job",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-02T19:38:10Z",
+        "completed_at": "2026-11-02T19:38:10Z"
+      }
+    ]
+  },
+  "artifacts": [
+    {
+      "id": 13173361100,
+      "name": "lab-evidence",
+      "size_in_bytes": 53236,
+      "created_at": "2026-11-02T19:38:10Z",
+      "expires_at": "2027-01-31T19:26:32Z"
+    }
+  ]
+}

@@ -22,6 +22,7 @@ The recursive circuit, original IPA and reused Ragu cryptography are unchanged.
 | Release executable | Build passed | [log](cli-build-followup.log) |
 | Clippy, all workspace targets | Passed with -D warnings | [log](clippy-followup.log) |
 | Formatting | cargo fmt --all --check passed | [empty clean log](format-followup.log) |
+| Hosted Linux CI (`ubuntu-24.04`) | Passed all workflow steps in 11m 38s; uploaded `lab-evidence` artifact (`13173361100`, 53,236 bytes) | [run 41509961599](https://github.com/intelliDean/Build-Halo-Lab/actions/runs/41509961599), [metadata](github-actions-run-41509961599.json) |
 
 The new real-process suite generates fresh 1-, 2-, 4- and 8-step proofs and
 verifies each in a separate process without a history list. It repeats statement
@@ -96,8 +97,7 @@ subprocess command/stdout/stderr and exact rejection expectation.
 
 ## Remaining limitations
 
-No local implementation blocker remains. Hosted Linux CI has not been executed;
-it now runs gate regressions before real acceptance. External cryptographic review
+No local implementation blocker remains. Hosted Linux CI on `ubuntu-24.04` has been executed and passed all checks ([run 41509961599](https://github.com/intelliDean/Build-Halo-Lab/actions/runs/41509961599) on commit `e22eb2a33e0c750aa974e29775de9b5f96fca80b`, [recorded metadata](github-actions-run-41509961599.json)), running gate regressions before real acceptance and uploading the `lab-evidence` artifact (`13173361100`). External cryptographic review
 and learner participation have not occurred; the review checklist/pilot kit are
 prepared. The toolchain, dependencies and Ragu revision remain pinned; Ragu uses
 fixed insecure educational registry tags and a documented transport adapter.

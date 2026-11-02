@@ -28,7 +28,7 @@ an implemented check is not a claim that an unrecorded CI run occurred.
 | Modified proof | IPA point/scalar/order tests; Ragu compressed-byte modifications and terminal rejection |
 | Bounded file read | CLI reads at most 128 KiB plus one byte before decoding; Rust boundary/cursor/I/O tests and oversized-file CLI case |
 | Process-result gate | Exact expected rejection status and diagnostic; strict `verified: true`, terminal-check flag and independent statement; 13 regression tests in `tests/test_acceptance.py` |
-| Reproducible CI | `.github/workflows/ci.yml`; hosted execution status explicitly recorded separately |
+| Reproducible CI | `.github/workflows/ci.yml`; executed on hosted `ubuntu-24.04` ([run 41509961599](https://github.com/intelliDean/Build-Halo-Lab/actions/runs/41509961599), [metadata](../evidence/github-actions-run-41509961599.json)) |
 | Proof/time/hardware measurements | Single real release run per case in acceptance JSON; timing scope disclosed |
 | Complete assessed lesson | `lessons/ipa`, `tests/assessment.py`, reference 8/8 and five mutants rejected |
 | Reviewer / pilot materials | `docs/review-checklist.md`, `docs/pilot.md`; no external participation invented |
@@ -50,5 +50,5 @@ treating this table as a security certification.
 - [x] Measured proof sizes, proving/verification/setup times and hardware.
 - [x] Lesson solution 8/8; five mutants rejected; fresh starter fails as expected.
 - [x] Review checklist and pilot kit prepared, source attribution/licenses retained.
-- [ ] Hosted Linux CI executed (configuration prepared).
+- [x] Hosted Linux CI executed on `ubuntu-24.04` ([run 41509961599](https://github.com/intelliDean/Build-Halo-Lab/actions/runs/41509961599) on commit `e22eb2a33e0c750aa974e29775de9b5f96fca80b`; artifact `lab-evidence` ID `13173361100`).
 - [ ] External cryptographic review and learner pilot performed (materials prepared).
