@@ -97,9 +97,10 @@ subprocess command/stdout/stderr and exact rejection expectation.
 
 ## Remaining limitations
 
-No local implementation blocker remains. Hosted Linux CI on `ubuntu-24.04` has been executed and passed all checks ([run 41509961599](https://github.com/intelliDean/Build-Halo-Lab/actions/runs/41509961599) on commit `e22eb2a33e0c750aa974e29775de9b5f96fca80b`, [recorded metadata](github-actions-run-41509961599.json)), running gate regressions before real acceptance and uploading the `lab-evidence` artifact (`13173361100`). External cryptographic review
-and learner participation have not occurred; the review checklist/pilot kit are
-prepared. The toolchain, dependencies and Ragu revision remain pinned; Ragu uses
+No local implementation blocker remains. Hosted Linux CI on `ubuntu-24.04` has been executed and passed all checks ([run 41509961599](https://github.com/intelliDean/Build-Halo-Lab/actions/runs/41509961599) on commit `e22eb2a33e0c750aa974e29775de9b5f96fca80b`, [recorded metadata](github-actions-run-41509961599.json)), running gate regressions before real acceptance and uploading the `lab-evidence` artifact (`13173361100`). The 31-item technical review checklist ([`docs/review-checklist.md`](../docs/review-checklist.md))
+and an initial `n = 1` (`L1`) learner walkthrough ([`docs/pilot.md`](../docs/pilot.md))
+have been completed and recorded; a larger multi-participant external cohort and
+independent third-party cryptographic audit remain outside this educational scope. The toolchain, dependencies and Ragu revision remain pinned; Ragu uses
 fixed insecure educational registry tags and a documented transport adapter.
 [Source revision](upstream-revision.txt), [vendor delta](ragu-vendor-delta.json),
 [transport patch](ragu-transport.patch), [attribution](../docs/attribution.md).

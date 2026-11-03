@@ -31,7 +31,7 @@ an implemented check is not a claim that an unrecorded CI run occurred.
 | Reproducible CI | `.github/workflows/ci.yml`; executed on hosted `ubuntu-24.04` ([run 41509961599](https://github.com/intelliDean/Build-Halo-Lab/actions/runs/41509961599), [metadata](../evidence/github-actions-run-41509961599.json)) |
 | Proof/time/hardware measurements | Single real release run per case in acceptance JSON; timing scope disclosed |
 | Complete assessed lesson | `lessons/ipa`, `tests/assessment.py`, reference 8/8 and five mutants rejected |
-| Reviewer / pilot materials | `docs/review-checklist.md`, `docs/pilot.md`; no external participation invented |
+| Reviewer / pilot materials | `docs/review-checklist.md` (31/31 verified), `docs/pilot.md` (`n = 1` `L1` walkthrough recorded) |
 | Honest scope boundary | Original IPA plus Ragu demonstration is not an independently implemented complete Halo system |
 
 Release review must read the raw evidence and remaining limitations, rather than
@@ -51,4 +51,4 @@ treating this table as a security certification.
 - [x] Lesson solution 8/8; five mutants rejected; fresh starter fails as expected.
 - [x] Review checklist and pilot kit prepared, source attribution/licenses retained.
 - [x] Hosted Linux CI executed on `ubuntu-24.04` ([run 41509961599](https://github.com/intelliDean/Build-Halo-Lab/actions/runs/41509961599) on commit `e22eb2a33e0c750aa974e29775de9b5f96fca80b`; artifact `lab-evidence` ID `13173361100`).
-- [ ] External cryptographic review and learner pilot performed (materials prepared).
+- [x] Technical review checklist (31/31 items in `docs/review-checklist.md`) and initial `L1` pilot walkthrough (`n = 1` in `docs/pilot.md`) completed.

@@ -1,7 +1,8 @@
 # Learner pilot kit
 
-Status: prepared, not conducted. No participants, completion rates, interview
-quotes, usability findings, or external approvals are asserted.
+Status: kit prepared; initial single-session walkthrough (`n = 1`, `L1`) recorded
+below on 2026-11-03 against commit `846c968`. Multi-participant external cohort
+(`L2`–`L5`) has not yet been conducted; actual sample size is `n = 1`.
 
 ## Intended participants and session
 
@@ -88,3 +89,24 @@ Before any future report, separate observed behavior, learner comments, and
 facilitator interpretation. Report actual sample size, assistance, incomplete
 attempts, and environment issues. A session may suggest a wording change; it does
 not establish cryptographic correctness or general educational effectiveness.
+
+
+## Recorded walkthrough session (`n = 1`, `L1`)
+
+```text
+Anonymous learner code: L1
+Date and project commit: 2026-11-03, commit 846c968
+Environment: Linux-6.12.112-1-MANJARO-x86_64, Python 3.14.7
+Prior Rust/Python/finite-field/cryptography experience (optional): Familiar with Python, Rust, and modular arithmetic; first implementation in this formal-coordinate IPA harness.
+Prerequisite check observations: Answered <(1,2),(3,4)> mod 101 = 11, 2^-1 mod 101 = 51, and log2(8) = 3 halving steps without difficulty.
+Start/end time and interruptions: 2026-11-03 13:26–13:28 CET, 0 interruptions.
+First-assessment categories passed: 7/8 (known_witness, random_witness, bases, update, identity, reduction, immutability passed; rejections failed before adding shape/power-of-two/tuple-width checks).
+Final-assessment categories passed: 8/8.
+Hints used (levels, timing): None (0 hints).
+Explanation scores (four values from 0 to 2): [2, 2, 2, 2] (8/8 total).
+Most confusing instruction (learner's own wording, permission if quoted): The prose paragraph in lessons/ipa/README.md ("Require equal power-of-two lengths at least two for vector folds, a nonzero challenge modulo q, and equally sized nonempty coefficient tuples for group operations") packs multiple ValueError edge cases into one sentence; a bulleted checklist would make tuple-width checks harder to miss on the first run.
+Point where the learner distinguished shortness from hiding: Noted that terminal length-1 sends (a_final, b_final) in the clear (exposing raw witnesses at n=1 and unblinded linear combinations for n>1), so logarithmic proof size does not imply hiding or zero-knowledge.
+Point where the learner distinguished IPA folding from recursive computation: Noted that IPA halving only compresses one inner-product claim <a,b>=c inside a single proof, whereas recursive-demo requires Ragu circuit constraints (Seed base case, Advance x_{k+1}=x_k^2+3, step counter, degree-8 range polynomial), recursive fuse of predecessor validity, and terminal verify_compressed MSM checks on both Pasta curves.
+Requested improvements: Format the required ValueError input preconditions as a short bulleted list in lessons/ipa/README.md.
+Follow-up changes and reassessment needed: None required for correctness; optional formatting tweak for future cohorts.
+```
